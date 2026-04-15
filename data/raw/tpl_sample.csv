@@ -1,5 +1,0 @@
-id,reaction_smiles,unused_note
-1,CCO.O=C=O>>CCOC(=O)O,valid row
-2,CCO>>,valid format but weak chemistry
-3,,missing reaction
-4,not_a_reaction_smiles,invalid format
