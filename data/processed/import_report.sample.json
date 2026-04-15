@@ -1,0 +1,21 @@
+{
+  "input_csv": "data/raw/tpl_sample.csv",
+  "output_json": "data/processed/reactions.sample.json",
+  "row_count_input": 4,
+  "row_count_output": 2,
+  "row_count_skipped": 2,
+  "reaction_column_used": "reaction_smiles",
+  "row_id_column_used": "id",
+  "loader": "csv_fallback",
+  "skipped_rows": [
+    {
+      "row_index": 2,
+      "reason": "missing_reaction_smiles"
+    },
+    {
+      "row_index": 3,
+      "reason": "reaction_smiles_missing_separator",
+      "value": "not_a_reaction_smiles"
+    }
+  ]
+}

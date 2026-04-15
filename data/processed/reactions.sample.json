@@ -1,0 +1,73 @@
+[
+  {
+    "reaction_id": "base_1",
+    "source": "base",
+    "created_by": "tpl_importer",
+    "created_at": "2026-04-14T20:05:05Z",
+    "reaction_smiles": "CCO.O=C=O>>CCOC(=O)O",
+    "reactants_smiles": [
+      "CCO",
+      "O=C=O"
+    ],
+    "products_smiles": [
+      "CCOC(=O)O"
+    ],
+    "display_name": null,
+    "reaction_class": null,
+    "tags": [],
+    "difficulty": null,
+    "hint": null,
+    "notes": null,
+    "quality": {
+      "is_validated": false,
+      "validation_messages": [
+        "rdkit_unavailable"
+      ]
+    },
+    "provenance": {
+      "dataset": "drfp_tpl",
+      "dataset_record_id": "row_1",
+      "import_version": "0.1.0"
+    },
+    "extensions": {
+      "conditions": null,
+      "catalyst": null,
+      "mechanism": null,
+      "references": []
+    }
+  },
+  {
+    "reaction_id": "base_2",
+    "source": "base",
+    "created_by": "tpl_importer",
+    "created_at": "2026-04-14T20:05:05Z",
+    "reaction_smiles": "CCO>>",
+    "reactants_smiles": [
+      "CCO"
+    ],
+    "products_smiles": [],
+    "display_name": null,
+    "reaction_class": null,
+    "tags": [],
+    "difficulty": null,
+    "hint": null,
+    "notes": null,
+    "quality": {
+      "is_validated": false,
+      "validation_messages": [
+        "rdkit_unavailable"
+      ]
+    },
+    "provenance": {
+      "dataset": "drfp_tpl",
+      "dataset_record_id": "row_2",
+      "import_version": "0.1.0"
+    },
+    "extensions": {
+      "conditions": null,
+      "catalyst": null,
+      "mechanism": null,
+      "references": []
+    }
+  }
+]
