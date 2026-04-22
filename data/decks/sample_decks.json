@@ -1,0 +1,34 @@
+[
+  {
+    "deck_id": "starter_set_a",
+    "name": "Starter Set A",
+    "description": "Small sample deck using stable reaction_id references from the MVP dataset.",
+    "reaction_ids": [
+      "base_3",
+      "base_6",
+      "base_8",
+      "base_13",
+      "base_27"
+    ]
+  },
+  {
+    "deck_id": "starter_set_b",
+    "name": "Starter Set B",
+    "description": "Second small sample deck for deck-backed quiz testing.",
+    "reaction_ids": [
+      "base_30",
+      "base_33",
+      "base_47",
+      "base_51",
+      "base_54"
+    ]
+  },
+  {
+    "deck_id": "ba3",
+    "name": "ba3",
+    "description": "",
+    "reaction_ids": [
+      "user_1"
+    ]
+  }
+]

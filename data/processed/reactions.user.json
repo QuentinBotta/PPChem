@@ -1,0 +1,38 @@
+[
+  {
+    "reaction_id": "user_1",
+    "source": "user",
+    "created_by": "streamlit_app",
+    "created_at": "2026-04-22T10:45:18Z",
+    "reaction_smiles": "CC=O>>CCOC(C)=O",
+    "reactants_smiles": [
+      "CC=O"
+    ],
+    "products_smiles": [
+      "CCOC(C)=O"
+    ],
+    "display_name": "tischenko",
+    "reaction_class": null,
+    "tags": [
+      "carbonyl"
+    ],
+    "difficulty": null,
+    "hint": null,
+    "notes": null,
+    "quality": {
+      "is_validated": true,
+      "validation_messages": []
+    },
+    "provenance": {
+      "dataset": "user",
+      "dataset_record_id": "user_1",
+      "import_version": "manual_entry_v1"
+    },
+    "extensions": {
+      "conditions": null,
+      "catalyst": null,
+      "mechanism": null,
+      "references": []
+    }
+  }
+]

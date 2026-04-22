@@ -115,16 +115,21 @@ def convert_tpl_csv(
 
     records: list[ReactionRecord] = []
     skipped: list[dict[str, Any]] = []
+    skipped_reason_counts: dict[str, int] = {}
 
     for index, row in enumerate(rows):
         raw_reaction = row.get(reaction_col)
         if _is_missing(raw_reaction):
-            skipped.append({"row_index": int(index), "reason": "missing_reaction_smiles"})
+            reason = "missing_reaction_smiles"
+            skipped.append({"row_index": int(index), "reason": reason})
+            skipped_reason_counts[reason] = skipped_reason_counts.get(reason, 0) + 1
             continue
 
         reaction_smiles = str(raw_reaction).strip()
         if ">>" not in reaction_smiles:
-            skipped.append({"row_index": int(index), "reason": "reaction_smiles_missing_separator", "value": reaction_smiles})
+            reason = "reaction_smiles_missing_separator"
+            skipped.append({"row_index": int(index), "reason": reason, "value": reaction_smiles})
+            skipped_reason_counts[reason] = skipped_reason_counts.get(reason, 0) + 1
             continue
 
         reactants, products = _split_reaction_smiles(reaction_smiles)
@@ -164,9 +169,12 @@ def convert_tpl_csv(
         "row_count_input": int(len(rows)),
         "row_count_output": int(len(records)),
         "row_count_skipped": int(len(skipped)),
+        "columns_found": columns,
         "reaction_column_used": reaction_col,
         "row_id_column_used": row_id_col,
+        "columns_not_mapped": [column for column in columns if column not in {reaction_col, row_id_col}],
         "loader": loader,
+        "skipped_reason_counts": skipped_reason_counts,
         "skipped_rows": skipped,
     }
 
