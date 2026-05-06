@@ -1496,9 +1496,9 @@ def render_browser(
 
 
 def main() -> None:
-    st.set_page_config(page_title="PPChem Reaction Browser", layout="wide")
+    st.set_page_config(page_title="Hatzimanipractice Reaction Browser", layout="wide")
 
-    st.title("PPChem")
+    st.title("Hatzimanipractice")
     st.caption("Browse and quiz reactions from the conservative MVP dataset.")
 
     if not DATASET_PATH.exists():
