@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 from pathlib import Path
 
+from ppchem.decks.deck_mutations import remove_reaction_from_all_decks_file
 from ppchem.models.reaction_io import read_reaction_records, write_reaction_records
 from ppchem.models.reaction_schema import ReactionRecord
 
@@ -11,6 +13,14 @@ try:
 except Exception:
     Chem = None
     rdChemReactions = None
+
+
+@dataclass(frozen=True)
+class UserReactionDeletionResult:
+    reaction_id: str
+    removed_from_user_store: bool
+    affected_deck_ids: list[str]
+    affected_deck_names: list[str]
 
 
 def load_optional_reactions(path: str | Path) -> list[ReactionRecord]:
@@ -27,6 +37,24 @@ def find_reaction_by_id(records: list[ReactionRecord], reaction_id: str) -> Reac
     return None
 
 
+def validate_unique_reaction_ids(records: list[ReactionRecord]) -> None:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+
+    for record in records:
+        if record.reaction_id in seen and record.reaction_id not in duplicates:
+            duplicates.append(record.reaction_id)
+            continue
+        seen.add(record.reaction_id)
+
+    if duplicates:
+        duplicate_list = ", ".join(duplicates)
+        raise ValueError(
+            "Duplicate reaction_id values found while loading merged reactions: "
+            f"{duplicate_list}. Base and user stores must not share reaction_id values."
+        )
+
+
 def load_app_reactions(
     *,
     base_path: str | Path,
@@ -35,6 +63,7 @@ def load_app_reactions(
     records = list(read_reaction_records(base_path))
     if user_path is not None:
         records.extend(load_optional_reactions(user_path))
+    validate_unique_reaction_ids(records)
     return records
 
 
@@ -258,3 +287,31 @@ def delete_user_reaction_from_store(
     removed = len(updated_records) != len(user_records)
     write_reaction_records(updated_records, user_path)
     return removed
+
+
+def delete_user_reaction_with_deck_cleanup(
+    *,
+    user_path: str | Path,
+    decks_path: str | Path,
+    reaction_id: str,
+) -> UserReactionDeletionResult:
+    user_records = load_optional_reactions(user_path)
+    record = find_reaction_by_id(user_records, reaction_id)
+
+    if record is None:
+        raise ValueError(f"Could not find user reaction: {reaction_id}")
+    if record.source != "user":
+        raise ValueError("Only user reactions can be deleted with this helper")
+
+    deck_cleanup_result = remove_reaction_from_all_decks_file(decks_path, reaction_id=reaction_id)
+    removed_from_user_store = delete_user_reaction_from_store(user_path=user_path, reaction_id=reaction_id)
+
+    if not removed_from_user_store:
+        raise ValueError(f"Could not delete user reaction: {reaction_id}")
+
+    return UserReactionDeletionResult(
+        reaction_id=reaction_id,
+        removed_from_user_store=True,
+        affected_deck_ids=[deck.deck_id for deck in deck_cleanup_result.affected_decks],
+        affected_deck_names=[deck.name for deck in deck_cleanup_result.affected_decks],
+    )

@@ -4,6 +4,7 @@ from ppchem.app.reaction_sources import (
     append_user_reaction,
     build_updated_user_reaction_record,
     build_user_reaction_record,
+    delete_user_reaction_with_deck_cleanup,
     delete_user_reaction_from_store,
     find_reaction_by_id,
     load_app_reactions,
@@ -12,7 +13,9 @@ from ppchem.app.reaction_sources import (
     next_user_reaction_id,
     split_reaction_smiles,
     update_user_reaction_in_store,
+    validate_unique_reaction_ids,
 )
+from ppchem.decks.deck_io import read_deck_records, write_deck_records
 from ppchem.decks.deck_resolution import build_reaction_lookup, resolve_deck_records
 from ppchem.decks.deck_schema import DeckRecord
 from ppchem.models.reaction_io import write_reaction_records
@@ -57,6 +60,29 @@ def test_load_app_reactions_handles_missing_user_store_as_empty(tmp_path: Path) 
     loaded = load_app_reactions(base_path=base_path, user_path=tmp_path / "reactions.user.json")
 
     assert [record.reaction_id for record in loaded] == ["base_1"]
+
+
+def test_load_app_reactions_rejects_duplicate_reaction_id_collision(tmp_path: Path) -> None:
+    base_path = tmp_path / "reactions.base.json"
+    user_path = tmp_path / "reactions.user.json"
+    write_reaction_records([_record("base_1"), _record("base_2")], base_path)
+    colliding_user_record = _record("base_2")
+    colliding_user_record.source = "user"
+    write_reaction_records([colliding_user_record], user_path)
+
+    try:
+        load_app_reactions(base_path=base_path, user_path=user_path)
+    except ValueError as exc:
+        message = str(exc)
+        assert "Duplicate reaction_id values found while loading merged reactions" in message
+        assert "base_2" in message
+        return
+
+    raise AssertionError("Expected duplicate merged reaction_id collision to raise ValueError")
+
+
+def test_validate_unique_reaction_ids_accepts_unique_records() -> None:
+    validate_unique_reaction_ids([_record("base_1"), _record("user_1"), _record("user_2")])
 
 
 def test_next_user_reaction_id_uses_user_namespace_safely() -> None:
@@ -211,6 +237,69 @@ def test_delete_user_reaction_from_store_uses_reaction_id_not_order(tmp_path: Pa
 
     assert removed is True
     assert [record.reaction_id for record in loaded] == ["user_8", "user_5"]
+
+
+def test_delete_user_reaction_with_deck_cleanup_deletes_unreferenced_user_reaction(tmp_path: Path) -> None:
+    user_path = tmp_path / "reactions.user.json"
+    decks_path = tmp_path / "decks.json"
+    write_reaction_records([_record("user_2"), _record("user_5")], user_path)
+    write_deck_records([DeckRecord(deck_id="study", name="Study", reaction_ids=["base_1"])], decks_path)
+
+    result = delete_user_reaction_with_deck_cleanup(
+        user_path=user_path,
+        decks_path=decks_path,
+        reaction_id="user_2",
+    )
+
+    assert result.removed_from_user_store is True
+    assert result.affected_deck_ids == []
+    assert [record.reaction_id for record in load_optional_reactions(user_path)] == ["user_5"]
+    assert read_deck_records(decks_path)[0].reaction_ids == ["base_1"]
+
+
+def test_delete_user_reaction_with_deck_cleanup_removes_deck_references(tmp_path: Path) -> None:
+    user_path = tmp_path / "reactions.user.json"
+    decks_path = tmp_path / "decks.json"
+    write_reaction_records([_record("user_2"), _record("user_5")], user_path)
+    write_deck_records(
+        [
+            DeckRecord(deck_id="study", name="Study", reaction_ids=["user_2", "base_1"]),
+            DeckRecord(deck_id="review", name="Review", reaction_ids=["user_2"]),
+        ],
+        decks_path,
+    )
+
+    result = delete_user_reaction_with_deck_cleanup(
+        user_path=user_path,
+        decks_path=decks_path,
+        reaction_id="user_2",
+    )
+    decks = read_deck_records(decks_path)
+
+    assert result.removed_from_user_store is True
+    assert result.affected_deck_ids == ["study", "review"]
+    assert result.affected_deck_names == ["Study", "Review"]
+    assert [record.reaction_id for record in load_optional_reactions(user_path)] == ["user_5"]
+    assert decks[0].reaction_ids == ["base_1"]
+    assert decks[1].reaction_ids == []
+
+
+def test_delete_user_reaction_with_deck_cleanup_rejects_base_reactions(tmp_path: Path) -> None:
+    user_path = tmp_path / "reactions.user.json"
+    decks_path = tmp_path / "decks.json"
+    write_reaction_records([_record("base_2")], user_path)
+    write_deck_records([], decks_path)
+
+    try:
+        delete_user_reaction_with_deck_cleanup(
+            user_path=user_path,
+            decks_path=decks_path,
+            reaction_id="base_2",
+        )
+    except ValueError:
+        return
+
+    raise AssertionError("Expected base reaction deletion to be rejected")
 
 
 def test_deck_references_remain_valid_after_non_id_user_reaction_update(tmp_path: Path) -> None:

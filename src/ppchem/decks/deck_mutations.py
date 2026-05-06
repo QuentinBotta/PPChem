@@ -21,6 +21,12 @@ class DeckRemovalResult:
     removed_reaction: bool
 
 
+@dataclass(frozen=True)
+class DeckBulkRemovalResult:
+    affected_decks: list[DeckRecord]
+    removed_reaction: bool
+
+
 def make_deck_id_from_name(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
     return normalized or "deck"
@@ -119,3 +125,39 @@ def remove_reaction_from_decks_file(
     write_deck_records(updated_decks, decks_path)
 
     return DeckRemovalResult(deck=updated_deck, removed_reaction=removed_reaction)
+
+
+def find_decks_referencing_reaction(decks: list[DeckRecord], reaction_id: str) -> list[DeckRecord]:
+    return [deck for deck in decks if reaction_id in deck.reaction_ids]
+
+
+def remove_reaction_from_all_decks_file(
+    path: str | Path,
+    *,
+    reaction_id: str,
+) -> DeckBulkRemovalResult:
+    decks_path = Path(path)
+    decks = read_deck_records(decks_path) if decks_path.exists() else []
+
+    affected_decks = find_decks_referencing_reaction(decks, reaction_id)
+    if not affected_decks:
+        return DeckBulkRemovalResult(affected_decks=[], removed_reaction=False)
+
+    updated_decks: list[DeckRecord] = []
+    updated_affected_decks: list[DeckRecord] = []
+    for deck in decks:
+        if reaction_id not in deck.reaction_ids:
+            updated_decks.append(deck)
+            continue
+
+        updated_deck = DeckRecord(
+            deck_id=deck.deck_id,
+            name=deck.name,
+            description=deck.description,
+            reaction_ids=[item for item in deck.reaction_ids if item != reaction_id],
+        )
+        updated_decks.append(updated_deck)
+        updated_affected_decks.append(updated_deck)
+
+    write_deck_records(updated_decks, decks_path)
+    return DeckBulkRemovalResult(affected_decks=updated_affected_decks, removed_reaction=True)

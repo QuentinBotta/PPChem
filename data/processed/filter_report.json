@@ -1,0 +1,20 @@
+{
+  "input_json": "data/processed/reactions.base.json",
+  "output_json": "data/processed/reactions.mvp.json",
+  "total_input_rows": 445115,
+  "total_kept_rows": 5000,
+  "total_filtered_rows": 440115,
+  "filtering_criteria": {
+    "max_records": 5000,
+    "max_reaction_smiles_length": 120,
+    "max_reactants": 3,
+    "required_product_count": 1,
+    "max_component_smiles_length": 80
+  },
+  "filter_reason_counts": {
+    "reaction_smiles_too_long": 210195,
+    "too_many_reactants": 309746,
+    "component_smiles_too_long": 17884,
+    "mvp_size_limit": 86479
+  }
+}

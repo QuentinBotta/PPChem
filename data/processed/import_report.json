@@ -1,0 +1,21 @@
+{
+  "input_csv": "data\\raw\\tpl.csv",
+  "output_json": "data/processed/reactions.base.json",
+  "row_count_input": 445115,
+  "row_count_output": 445115,
+  "row_count_skipped": 0,
+  "columns_found": [
+    "rxn",
+    "rxn_class",
+    "split"
+  ],
+  "reaction_column_used": "rxn",
+  "row_id_column_used": null,
+  "columns_not_mapped": [
+    "rxn_class",
+    "split"
+  ],
+  "loader": "pandas",
+  "skipped_reason_counts": {},
+  "skipped_rows": []
+}

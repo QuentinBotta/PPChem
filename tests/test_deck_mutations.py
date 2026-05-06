@@ -4,7 +4,9 @@ from ppchem.decks.deck_io import read_deck_records, write_deck_records
 from ppchem.decks.deck_mutations import (
     add_reaction_to_decks_file,
     choose_unique_deck_id,
+    find_decks_referencing_reaction,
     make_deck_id_from_name,
+    remove_reaction_from_all_decks_file,
     remove_reaction_from_decks_file,
 )
 from ppchem.decks.deck_schema import DeckRecord
@@ -144,3 +146,36 @@ def test_remove_reaction_from_deck_handles_missing_reaction_id_gracefully(tmp_pa
     assert result.removed_reaction is False
     assert result.deck.reaction_ids == ["base_1"]
     assert decks[0].reaction_ids == ["base_1"]
+
+
+def test_find_decks_referencing_reaction_returns_all_matching_decks() -> None:
+    decks = [
+        DeckRecord(deck_id="a", name="A", reaction_ids=["user_2", "base_1"]),
+        DeckRecord(deck_id="b", name="B", reaction_ids=["base_3"]),
+        DeckRecord(deck_id="c", name="C", reaction_ids=["user_2"]),
+    ]
+
+    affected = find_decks_referencing_reaction(decks, "user_2")
+
+    assert [deck.deck_id for deck in affected] == ["a", "c"]
+
+
+def test_remove_reaction_from_all_decks_file_cleans_all_references(tmp_path: Path) -> None:
+    decks_path = tmp_path / "decks.json"
+    write_deck_records(
+        [
+            DeckRecord(deck_id="starter", name="Starter", reaction_ids=["user_2", "base_1"]),
+            DeckRecord(deck_id="review", name="Review", reaction_ids=["user_2"]),
+            DeckRecord(deck_id="other", name="Other", reaction_ids=["base_9"]),
+        ],
+        decks_path,
+    )
+
+    result = remove_reaction_from_all_decks_file(decks_path, reaction_id="user_2")
+    decks = read_deck_records(decks_path)
+
+    assert result.removed_reaction is True
+    assert [deck.deck_id for deck in result.affected_decks] == ["starter", "review"]
+    assert decks[0].reaction_ids == ["base_1"]
+    assert decks[1].reaction_ids == []
+    assert decks[2].reaction_ids == ["base_9"]

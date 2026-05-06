@@ -13,22 +13,35 @@ if str(SRC_DIR) not in sys.path:
 
 from ppchem.app.quiz import (
     QuizFilters,
+    build_quiz_source_key,
+    choose_scheduled_quiz_reaction,
     choose_quiz_source_pool,
-    choose_random_reaction,
     filter_quiz_records,
     recent_history_limit,
+    reset_quiz_session_state,
+    review_grade_label,
+    summarize_quiz_pool,
+    sync_quiz_session_source,
+    update_relearning_reaction_ids,
     update_recent_history,
+)
+from ppchem.app.quiz_progress import (
+    compute_quiz_progress_totals,
+    load_quiz_progress,
+    record_quiz_result_in_store,
+    summarize_reaction_study_status,
 )
 from ppchem.app.reaction_browser import BrowserFilters, choose_selected_record, filter_reactions, load_reactions, records_to_table
 from ppchem.app.rendering import build_molecule_grid_image, build_reaction_image
 from ppchem.app.reaction_sources import (
     append_user_reaction,
     build_updated_user_reaction_record,
+    delete_user_reaction_with_deck_cleanup,
     load_app_reactions,
     update_user_reaction_in_store,
 )
 from ppchem.decks.deck_io import read_deck_records
-from ppchem.decks.deck_mutations import add_reaction_to_decks_file, remove_reaction_from_decks_file
+from ppchem.decks.deck_mutations import add_reaction_to_decks_file, find_decks_referencing_reaction, remove_reaction_from_decks_file
 from ppchem.decks.deck_resolution import build_reaction_lookup, resolve_deck_records
 from ppchem.decks.deck_schema import DeckRecord
 from ppchem.models.reaction_schema import ReactionRecord
@@ -47,6 +60,7 @@ except Exception as exc:
 DATASET_PATH = ROOT_DIR / "data" / "processed" / "reactions.mvp.json"
 USER_DATASET_PATH = ROOT_DIR / "data" / "processed" / "reactions.user.json"
 DECKS_PATH = ROOT_DIR / "data" / "decks" / "sample_decks.json"
+QUIZ_PROGRESS_PATH = ROOT_DIR / "data" / "processed" / "quiz_progress.json"
 
 
 @st.cache_data(show_spinner="Loading reaction datasets...")
@@ -57,6 +71,11 @@ def cached_load_reactions(base_path: str, user_path: str) -> list[ReactionRecord
 @st.cache_data(show_spinner="Loading decks...")
 def cached_load_decks(path: str) -> list[DeckRecord]:
     return read_deck_records(path)
+
+
+@st.cache_data(show_spinner="Loading quiz progress...")
+def cached_load_quiz_progress(path: str) -> dict[str, object]:
+    return load_quiz_progress(path)
 
 
 def render_molecule_grid(title: str, smiles_values: list[str]) -> None:
@@ -85,7 +104,24 @@ def render_reaction_image(record: ReactionRecord) -> None:
             st.info(result.fallback_reason)
 
 
-def render_reaction_core_detail(record: ReactionRecord) -> None:
+def render_reaction_study_summary(record: ReactionRecord, progress_by_id: dict[str, object]) -> None:
+    st.subheader("Study Progress")
+
+    progress = progress_by_id.get(record.reaction_id)
+    summary = summarize_reaction_study_status(progress)
+
+    st.caption(
+        f"Status: {summary.status_label} | "
+        f"Last grade: {summary.last_grade_label or 'None yet'} | "
+        f"Next due: {summary.next_due_at or 'Not scheduled yet'}"
+    )
+    st.caption(
+        f"Seen: {summary.times_seen} | Again: {summary.count_again} | Hard: {summary.count_hard} | "
+        f"Good: {summary.count_good} | Easy: {summary.count_easy}"
+    )
+
+
+def render_reaction_core_detail(record: ReactionRecord, progress_by_id: dict[str, object]) -> None:
     st.header(record.display_name or record.reaction_id)
 
     st.caption(
@@ -96,6 +132,7 @@ def render_reaction_core_detail(record: ReactionRecord) -> None:
 
     st.subheader("Reaction SMILES")
     st.code(record.reaction_smiles, language="text")
+    render_reaction_study_summary(record, progress_by_id)
 
     left, right = st.columns(2)
     with left:
@@ -178,6 +215,73 @@ def render_user_reaction_edit_panel(record: ReactionRecord, user_path: Path) -> 
     st.rerun()
 
 
+def render_user_reaction_delete_panel(record: ReactionRecord, decks: list[DeckRecord], user_path: Path, decks_path: Path) -> None:
+    st.subheader("Delete Reaction")
+    st.caption("Deletion is available only for user reactions and is always keyed by reaction_id.")
+
+    delete_message = st.session_state.pop("browser_delete_reaction_message", None)
+    delete_level = st.session_state.pop("browser_delete_reaction_level", "success")
+    if delete_message:
+        if delete_level == "warning":
+            st.warning(delete_message)
+        else:
+            st.success(delete_message)
+
+    if record.source != "user":
+        st.info("Base/imported reactions are read-only and cannot be deleted.")
+        return
+
+    confirm_key = f"browser_confirm_delete_{record.reaction_id}"
+    if not st.session_state.get(confirm_key, False):
+        if st.button("Prepare delete", key=f"browser_prepare_delete_{record.reaction_id}"):
+            st.session_state[confirm_key] = True
+            st.rerun()
+        return
+
+    affected_decks = find_decks_referencing_reaction(decks, record.reaction_id)
+    if affected_decks:
+        st.warning(
+            "Deleting this reaction will also remove its reaction_id from these deck(s): "
+            + ", ".join(deck.name for deck in affected_decks)
+        )
+        confirm_label = "Delete reaction and remove it from affected decks"
+    else:
+        st.warning("This will permanently delete the selected user reaction.")
+        confirm_label = "Confirm delete user reaction"
+
+    confirm_col, cancel_col = st.columns(2)
+    with confirm_col:
+        if st.button(confirm_label, key=f"browser_confirm_delete_button_{record.reaction_id}"):
+            try:
+                result = delete_user_reaction_with_deck_cleanup(
+                    user_path=user_path,
+                    decks_path=decks_path,
+                    reaction_id=record.reaction_id,
+                )
+            except ValueError as exc:
+                st.warning(str(exc))
+                return
+
+            cached_load_reactions.clear()
+            cached_load_decks.clear()
+            st.session_state.pop(confirm_key, None)
+            st.session_state.browser_selected_reaction_id = None
+            st.session_state.browser_delete_reaction_level = "success"
+            if result.affected_deck_names:
+                st.session_state.browser_delete_reaction_message = (
+                    f"Deleted {record.reaction_id} and removed it from "
+                    + ", ".join(result.affected_deck_names)
+                    + "."
+                )
+            else:
+                st.session_state.browser_delete_reaction_message = f"Deleted {record.reaction_id}."
+            st.rerun()
+    with cancel_col:
+        if st.button("Cancel", key=f"browser_cancel_delete_{record.reaction_id}"):
+            st.session_state.pop(confirm_key, None)
+            st.rerun()
+
+
 def render_deck_action_panel(record: ReactionRecord, decks: list[DeckRecord], decks_path: Path) -> None:
     st.subheader("Decks")
 
@@ -244,6 +348,7 @@ def render_deck_action_panel(record: ReactionRecord, decks: list[DeckRecord], de
 
 def render_deck_inspector_panel(
     records: list[ReactionRecord],
+    progress_by_id: dict[str, object],
     decks: list[DeckRecord],
     decks_path: Path,
     *,
@@ -365,7 +470,12 @@ def render_deck_inspector_panel(
     st.rerun()
 
 
-def render_decks(records: list[ReactionRecord], decks: list[DeckRecord], decks_path: Path) -> None:
+def render_decks(
+    records: list[ReactionRecord],
+    progress_by_id: dict[str, object],
+    decks: list[DeckRecord],
+    decks_path: Path,
+) -> None:
     st.subheader("Decks")
     st.caption("Inspect saved decks, select reactions from them, and remove the selected reaction when needed.")
 
@@ -450,7 +560,7 @@ def render_decks(records: list[ReactionRecord], decks: list[DeckRecord], decks_p
 
     with right:
         if selected_record is not None:
-            render_reaction_core_detail(selected_record)
+            render_reaction_core_detail(selected_record, progress_by_id)
             if st.button("Remove selected reaction from deck", key=f"decks_tab_remove_{selected_record.reaction_id}"):
                 try:
                     result = remove_reaction_from_decks_file(
@@ -534,15 +644,18 @@ def render_add_reaction(records: list[ReactionRecord], user_path: Path) -> None:
 def render_reaction_detail(
     record: ReactionRecord,
     all_records: list[ReactionRecord],
+    progress_by_id: dict[str, object],
     decks: list[DeckRecord],
     decks_path: Path,
     user_path: Path,
 ) -> None:
-    render_reaction_core_detail(record)
+    render_reaction_core_detail(record, progress_by_id)
 
     if record.source == "user":
         with st.expander("Edit Reaction", expanded=False):
             render_user_reaction_edit_panel(record, user_path)
+        with st.expander("Delete Reaction", expanded=False):
+            render_user_reaction_delete_panel(record, decks, user_path, decks_path)
 
     with st.expander("Add To Deck", expanded=False):
         render_deck_action_panel(record, decks, decks_path)
@@ -550,6 +663,7 @@ def render_reaction_detail(
     with st.expander("Inspect Deck", expanded=False):
         render_deck_inspector_panel(
             all_records,
+            progress_by_id,
             decks,
             decks_path,
             title="Inspect Deck",
@@ -594,57 +708,104 @@ def resolve_selected_deck(
     return selected_deck, resolution.records, resolution.missing_reaction_ids
 
 
-def start_next_quiz_reaction(records: list[ReactionRecord]) -> None:
+def start_next_quiz_reaction(
+    records: list[ReactionRecord],
+    progress_by_id: dict[str, object],
+    *,
+    allow_study_ahead: bool,
+) -> None:
     current_id = st.session_state.get("quiz_reaction_id")
     recent_ids = st.session_state.get("quiz_recent_reaction_ids", [])
-    record = choose_random_reaction(records, previous_reaction_id=current_id, recent_reaction_ids=recent_ids)
-    st.session_state.quiz_reaction_id = record.reaction_id
+    relearning_ids = st.session_state.get("quiz_relearning_reaction_ids", [])
+    selection = choose_scheduled_quiz_reaction(
+        records,
+        progress_by_id=progress_by_id,
+        allow_study_ahead=allow_study_ahead,
+        relearning_reaction_ids=relearning_ids,
+        previous_reaction_id=current_id,
+        recent_reaction_ids=recent_ids,
+    )
+    if selection.record is None:
+        st.session_state.quiz_reaction_id = None
+        st.session_state.quiz_revealed = False
+        st.session_state.quiz_selection_mode = selection.selection_mode
+        return
+
+    st.session_state.quiz_reaction_id = selection.record.reaction_id
     st.session_state.quiz_recent_reaction_ids = update_recent_history(
         recent_ids,
-        record.reaction_id,
+        selection.record.reaction_id,
         max_length=recent_history_limit(len(records)),
     )
     st.session_state.quiz_revealed = False
+    st.session_state.quiz_selection_mode = selection.selection_mode
 
 
-def ensure_quiz_state(records: list[ReactionRecord]) -> None:
-    st.session_state.setdefault("quiz_correct", 0)
-    st.session_state.setdefault("quiz_incorrect", 0)
+def ensure_quiz_state(
+    records: list[ReactionRecord],
+    progress_by_id: dict[str, object],
+    *,
+    allow_study_ahead: bool,
+) -> None:
+    st.session_state.setdefault("quiz_count_again", 0)
+    st.session_state.setdefault("quiz_count_hard", 0)
+    st.session_state.setdefault("quiz_count_good", 0)
+    st.session_state.setdefault("quiz_count_easy", 0)
     st.session_state.setdefault("quiz_revealed", False)
     st.session_state.setdefault("quiz_last_result", None)
     st.session_state.setdefault("quiz_recent_reaction_ids", [])
+    st.session_state.setdefault("quiz_relearning_reaction_ids", [])
+    st.session_state.setdefault("quiz_selection_mode", None)
+    st.session_state.setdefault("quiz_source_key", None)
 
     if find_record_by_id(records, st.session_state.get("quiz_reaction_id")) is None:
-        start_next_quiz_reaction(records)
+        start_next_quiz_reaction(records, progress_by_id, allow_study_ahead=allow_study_ahead)
 
 
-def reset_quiz_session(records: list[ReactionRecord]) -> None:
-    st.session_state.quiz_correct = 0
-    st.session_state.quiz_incorrect = 0
-    st.session_state.quiz_revealed = False
-    st.session_state.quiz_last_result = None
-    st.session_state.quiz_recent_reaction_ids = []
-    st.session_state.quiz_reaction_id = None
+def reset_quiz_session(
+    records: list[ReactionRecord],
+    progress_by_id: dict[str, object],
+    *,
+    allow_study_ahead: bool,
+    source_key: str,
+) -> None:
+    reset_quiz_session_state(st.session_state)
+    st.session_state.quiz_source_key = source_key
 
     if records:
-        start_next_quiz_reaction(records)
+        start_next_quiz_reaction(records, progress_by_id, allow_study_ahead=allow_study_ahead)
 
 
-def record_quiz_result(is_correct: bool) -> None:
-    if is_correct:
-        st.session_state.quiz_correct += 1
-        st.session_state.quiz_last_result = "Marked correct"
-    else:
-        st.session_state.quiz_incorrect += 1
-        st.session_state.quiz_last_result = "Marked incorrect"
+def record_quiz_result(record: ReactionRecord, review_grade: str, progress_path: Path) -> None:
+    session_key = f"quiz_count_{review_grade}"
+    st.session_state[session_key] += 1
+    st.session_state.quiz_last_result = f"Marked {review_grade_label(review_grade)}"
+    st.session_state.quiz_relearning_reaction_ids = update_relearning_reaction_ids(
+        st.session_state.get("quiz_relearning_reaction_ids", []),
+        reaction_id=record.reaction_id,
+        keep_in_relearning=review_grade == "again",
+    )
+
+    record_quiz_result_in_store(
+        progress_path,
+        reaction_id=record.reaction_id,
+        review_grade=review_grade,
+    )
+    cached_load_quiz_progress.clear()
 
 
-def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
+def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord], progress_path: Path) -> None:
     st.subheader("Quiz")
     st.caption("Prompt: reactants only. Reveal the products when you are ready.")
 
     if not records:
         st.warning("No reactions are available for quiz mode.")
+        return
+
+    try:
+        progress_by_id = cached_load_quiz_progress(str(progress_path))
+    except ValueError as exc:
+        st.warning(str(exc))
         return
 
     deck_options = [""] + [deck.deck_id for deck in decks]
@@ -678,6 +839,7 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
     default_max_quiz_reactants = min(3, max_quiz_reactants)
 
     with st.expander("Quiz settings", expanded=False):
+        reset_requested = False
         quiz_max_reactants = st.slider(
             "Quiz maximum reactant components",
             min_value=1,
@@ -690,16 +852,16 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
             value=False,
             key="quiz_require_single_product",
         )
+        allow_study_ahead = st.toggle(
+            "Study ahead when no cards are due",
+            value=False,
+            key="quiz_allow_study_ahead",
+        )
         if st.button("Reset quiz session"):
-            filtered_records = filter_quiz_records(
-                source_records,
-                QuizFilters(
-                    max_reactants=quiz_max_reactants,
-                    require_single_product=quiz_require_single_product,
-                ),
-            )
-            reset_quiz_session(filtered_records)
-            st.rerun()
+            reset_requested = True
+    if "quiz_allow_study_ahead" not in st.session_state:
+        st.session_state.quiz_allow_study_ahead = False
+    allow_study_ahead = st.session_state.quiz_allow_study_ahead
 
     filtered_records = filter_quiz_records(
         source_records,
@@ -708,6 +870,22 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
             require_single_product=quiz_require_single_product,
         ),
     )
+    source_key = build_quiz_source_key(
+        filtered_records,
+        source_label=source_pool.label,
+        allow_study_ahead=allow_study_ahead,
+    )
+    source_key_changed = sync_quiz_session_source(st.session_state, source_key)
+    if source_key_changed:
+        progress_by_id = cached_load_quiz_progress(str(progress_path))
+    if reset_requested:
+        reset_quiz_session(
+            filtered_records,
+            progress_by_id,
+            allow_study_ahead=allow_study_ahead,
+            source_key=source_key,
+        )
+        st.rerun()
 
     st.caption(
         f"Quiz source: {source_pool.label} ({len(source_records)} reaction(s)) | "
@@ -732,17 +910,77 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
             st.warning("No reactions match the current quiz filters.")
         return
 
-    ensure_quiz_state(filtered_records)
+    ensure_quiz_state(filtered_records, progress_by_id, allow_study_ahead=allow_study_ahead)
     record = find_record_by_id(filtered_records, st.session_state.quiz_reaction_id)
-    if record is None:
+    if record is None and st.session_state.get("quiz_reaction_id") is not None:
         st.warning("Could not find the current quiz reaction.")
         return
 
-    answered = st.session_state.quiz_correct + st.session_state.quiz_incorrect
-    st.write(
-        f"Answered: {answered} | Correct: {st.session_state.quiz_correct} | "
-        f"Incorrect: {st.session_state.quiz_incorrect}"
+    answered = (
+        st.session_state.quiz_count_again
+        + st.session_state.quiz_count_hard
+        + st.session_state.quiz_count_good
+        + st.session_state.quiz_count_easy
     )
+    persistent_totals = compute_quiz_progress_totals(
+        progress_by_id,
+        reaction_ids=[quiz_record.reaction_id for quiz_record in filtered_records],
+    )
+    pool_status = summarize_quiz_pool(
+        filtered_records,
+        progress_by_id=progress_by_id,
+        relearning_reaction_ids=st.session_state.get("quiz_relearning_reaction_ids", []),
+    )
+    st.write(
+        f"Answered: {answered} | Again: {st.session_state.quiz_count_again} | "
+        f"Hard: {st.session_state.quiz_count_hard} | Good: {st.session_state.quiz_count_good} | "
+        f"Easy: {st.session_state.quiz_count_easy}"
+    )
+    st.caption(
+        f"Saved progress for current quiz pool: seen {persistent_totals.times_seen} | "
+        f"again {persistent_totals.count_again} | hard {persistent_totals.count_hard} | "
+        f"good {persistent_totals.count_good} | easy {persistent_totals.count_easy}"
+    )
+    st.caption(
+        f"Eligible now: due {pool_status.due_count} | new {pool_status.unseen_count} | "
+        f"relearning {pool_status.relearning_count} | reviewed but not due {pool_status.reviewed_not_due_count}"
+    )
+    st.caption(
+        "Mode: "
+        + (
+            "study ahead enabled"
+            if allow_study_ahead
+            else "normal due/new review"
+        )
+    )
+
+    if record is None:
+        if pool_status.eligible_count == 0:
+            st.success("No cards are due or new right now in the current quiz pool.")
+            if pool_status.reviewed_not_due_count > 0:
+                st.info("Turn on 'Study ahead when no cards are due' in Quiz settings to continue with reviewed not-due cards.")
+            else:
+                st.info("There are no reviewed not-due cards available for study ahead in this pool.")
+        else:
+            st.info("Reset the quiz session to begin reviewing the currently eligible cards.")
+        return
+
+    current_progress = progress_by_id.get(record.reaction_id)
+    if current_progress is not None and current_progress.last_grade is not None:
+        st.caption(
+            f"Current card status: last grade {review_grade_label(current_progress.last_grade)} | "
+            f"due at {current_progress.due_at or 'not scheduled'}"
+        )
+    else:
+        st.caption("Current card status: new/unseen")
+    if st.session_state.get("quiz_selection_mode") == "study_ahead":
+        st.caption("Current selection: study-ahead review of a not-due card")
+    elif st.session_state.get("quiz_selection_mode") == "relearning":
+        st.caption("Current selection: same-session relearning card")
+    elif st.session_state.get("quiz_selection_mode") == "due":
+        st.caption("Current selection: due review")
+    elif st.session_state.get("quiz_selection_mode") == "unseen":
+        st.caption("Current selection: new card")
 
     render_molecule_grid("Reactants", record.reactants_smiles)
 
@@ -754,7 +992,11 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
     with col_next:
         if st.button("Next reaction"):
             st.session_state.quiz_last_result = None
-            start_next_quiz_reaction(filtered_records)
+            start_next_quiz_reaction(
+                filtered_records,
+                progress_by_id,
+                allow_study_ahead=allow_study_ahead,
+            )
             st.rerun()
 
     if not st.session_state.quiz_revealed:
@@ -766,17 +1008,18 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
     st.subheader("Reaction SMILES")
     st.code(record.reaction_smiles, language="text")
 
-    col_correct, col_incorrect = st.columns(2)
-    with col_correct:
-        if st.button("Mark correct"):
-            record_quiz_result(True)
-            start_next_quiz_reaction(filtered_records)
-            st.rerun()
-    with col_incorrect:
-        if st.button("Mark incorrect"):
-            record_quiz_result(False)
-            start_next_quiz_reaction(filtered_records)
-            st.rerun()
+    grade_columns = st.columns(4)
+    for grade, column in zip(["again", "hard", "good", "easy"], grade_columns, strict=True):
+        with column:
+            if st.button(review_grade_label(grade)):
+                record_quiz_result(record, grade, progress_path)
+                updated_progress_by_id = cached_load_quiz_progress(str(progress_path))
+                start_next_quiz_reaction(
+                    filtered_records,
+                    updated_progress_by_id,
+                    allow_study_ahead=allow_study_ahead,
+                )
+                st.rerun()
 
     if st.session_state.quiz_last_result:
         st.caption(st.session_state.quiz_last_result)
@@ -784,6 +1027,7 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord]) -> None:
 
 def render_browser(
     records: list[ReactionRecord],
+    progress_by_id: dict[str, object],
     decks: list[DeckRecord],
     decks_path: Path,
     user_path: Path,
@@ -852,7 +1096,7 @@ def render_browser(
 
     with right:
         if selected_record is not None:
-            render_reaction_detail(selected_record, records, decks, decks_path, user_path)
+            render_reaction_detail(selected_record, records, progress_by_id, decks, decks_path, user_path)
 
 
 def main() -> None:
@@ -865,16 +1109,26 @@ def main() -> None:
         st.error(f"Dataset not found: {DATASET_PATH}")
         st.stop()
 
-    records = cached_load_reactions(str(DATASET_PATH), str(USER_DATASET_PATH))
+    try:
+        records = cached_load_reactions(str(DATASET_PATH), str(USER_DATASET_PATH))
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
+    try:
+        progress_by_id = cached_load_quiz_progress(str(QUIZ_PROGRESS_PATH))
+    except ValueError as exc:
+        st.error(str(exc))
+        st.stop()
+
     decks = cached_load_decks(str(DECKS_PATH)) if DECKS_PATH.exists() else []
 
     browser_tab, quiz_tab, decks_tab, add_reaction_tab = st.tabs(["Browser", "Quiz", "Decks", "Add Reaction"])
     with browser_tab:
-        render_browser(records, decks, DECKS_PATH, USER_DATASET_PATH)
+        render_browser(records, progress_by_id, decks, DECKS_PATH, USER_DATASET_PATH)
     with quiz_tab:
-        render_quiz(records, decks)
+        render_quiz(records, decks, QUIZ_PROGRESS_PATH)
     with decks_tab:
-        render_decks(records, decks, DECKS_PATH)
+        render_decks(records, progress_by_id, decks, DECKS_PATH)
     with add_reaction_tab:
         render_add_reaction(records, USER_DATASET_PATH)
 
