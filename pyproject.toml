@@ -13,9 +13,13 @@ dependencies = [
 
 [project.optional-dependencies]
 chem = ["rdkit"]
-app = ["streamlit>=1.35"]
+app = [
+  "streamlit>=1.35",
+  "streamlit-ketcher>=0.0.1",
+]
 app-chem = [
   "streamlit>=1.35",
+  "streamlit-ketcher>=0.0.1",
   "rdkit",
 ]
 dev = ["pytest>=8.0"]

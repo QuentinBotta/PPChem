@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -84,6 +85,25 @@ def split_reaction_smiles(reaction_smiles: str) -> tuple[list[str], list[str]]:
         raise ValueError("Reaction SMILES must include at least one product")
 
     return reactants, products
+
+
+def build_reaction_smiles_from_visual_inputs(
+    *,
+    reactants_smiles: str,
+    products_smiles: str,
+) -> str:
+    normalized_reactants = reactants_smiles.strip()
+    normalized_products = products_smiles.strip()
+
+    if not normalized_reactants:
+        raise ValueError("Visual editor must include at least one reactant structure")
+    if not normalized_products:
+        raise ValueError("Visual editor must include at least one product structure")
+
+    reaction_smiles = f"{normalized_reactants}>>{normalized_products}"
+    # Reuse the existing parser so visual mode enforces the same minimum shape.
+    split_reaction_smiles(reaction_smiles)
+    return reaction_smiles
 
 
 def normalize_user_tags(raw_tags: str) -> list[str]:
@@ -204,6 +224,49 @@ def append_user_reaction(
     )
     write_reaction_records([*user_records, new_record], user_path)
     return new_record
+
+
+def build_imported_user_reaction_record(
+    source_record: ReactionRecord,
+    *,
+    existing_records: list[ReactionRecord],
+    package_reaction_id: str,
+    created_by: str = "deck_package_import",
+) -> ReactionRecord:
+    normalized = source_record.reaction_smiles.strip()
+    reactants, products = split_reaction_smiles(normalized)
+    reaction_id = next_user_reaction_id(existing_records)
+
+    provenance = copy.deepcopy(source_record.provenance)
+    provenance.update(
+        {
+            "dataset": "user",
+            "dataset_record_id": reaction_id,
+            "import_version": "deck_package_v1",
+            "package_original_reaction_id": source_record.reaction_id,
+            "package_reaction_id": package_reaction_id,
+            "package_original_source": source_record.source,
+        }
+    )
+
+    return ReactionRecord(
+        reaction_id=reaction_id,
+        source="user",
+        created_by=created_by,
+        created_at=ReactionRecord.utc_now_iso(),
+        reaction_smiles=normalized,
+        reactants_smiles=reactants,
+        products_smiles=products,
+        display_name=source_record.display_name,
+        reaction_class=source_record.reaction_class,
+        tags=list(source_record.tags),
+        difficulty=source_record.difficulty,
+        hint=source_record.hint,
+        notes=source_record.notes,
+        quality=copy.deepcopy(source_record.quality),
+        provenance=provenance,
+        extensions=copy.deepcopy(source_record.extensions),
+    )
 
 
 def build_updated_user_reaction_record(

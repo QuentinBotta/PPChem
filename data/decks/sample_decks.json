@@ -28,7 +28,9 @@
     "name": "ba3",
     "description": "",
     "reaction_ids": [
-      "user_1"
+      "user_1",
+      "user_2",
+      "user_5"
     ]
   }
 ]

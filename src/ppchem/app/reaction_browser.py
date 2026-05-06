@@ -16,6 +16,22 @@ class BrowserFilters:
     source: str = "all"
 
 
+@dataclass(frozen=True)
+class BrowserPagination:
+    page_index: int
+    page_size: int
+    total_results: int
+    total_pages: int
+    start_index: int
+    end_index: int
+
+
+@dataclass(frozen=True)
+class BrowserReactantSliderState:
+    max_value: int
+    current_value: int
+
+
 def load_reactions(path: str | Path) -> list[ReactionRecord]:
     return read_reaction_records(path)
 
@@ -78,6 +94,67 @@ def filter_reactions(records: list[ReactionRecord], filters: BrowserFilters) -> 
         filtered = [record for record in filtered if len(record.reactants_smiles) <= filters.max_reactants]
 
     return filtered
+
+
+def compute_browser_reactant_slider_state(
+    records: list[ReactionRecord],
+    *,
+    requested_value: int | None,
+    fallback_max: int = 3,
+) -> BrowserReactantSliderState:
+    if fallback_max <= 0:
+        raise ValueError("fallback_max must be positive")
+
+    max_value = max((len(record.reactants_smiles) for record in records), default=fallback_max)
+    if max_value <= 0:
+        max_value = fallback_max
+
+    if requested_value is None:
+        current_value = max_value
+    else:
+        current_value = min(max(requested_value, 1), max_value)
+
+    return BrowserReactantSliderState(
+        max_value=max_value,
+        current_value=current_value,
+    )
+
+
+def build_browser_page_signature(filters: BrowserFilters, *, page_size: int) -> tuple[str, int | None, str, int]:
+    return (
+        filters.search_text.strip().lower(),
+        filters.max_reactants,
+        filters.source,
+        page_size,
+    )
+
+
+def compute_browser_pagination(*, total_results: int, page_size: int, requested_page_index: int) -> BrowserPagination:
+    if page_size <= 0:
+        raise ValueError("page_size must be positive")
+
+    total_pages = max(1, (total_results + page_size - 1) // page_size)
+    clamped_page_index = min(max(requested_page_index, 0), total_pages - 1)
+
+    if total_results == 0:
+        start_index = 0
+        end_index = 0
+    else:
+        start_index = clamped_page_index * page_size
+        end_index = min(start_index + page_size, total_results)
+
+    return BrowserPagination(
+        page_index=clamped_page_index,
+        page_size=page_size,
+        total_results=total_results,
+        total_pages=total_pages,
+        start_index=start_index,
+        end_index=end_index,
+    )
+
+
+def paginate_reactions(records: list[ReactionRecord], pagination: BrowserPagination) -> list[ReactionRecord]:
+    return records[pagination.start_index:pagination.end_index]
 
 
 def records_to_table(records: list[ReactionRecord]) -> pd.DataFrame:

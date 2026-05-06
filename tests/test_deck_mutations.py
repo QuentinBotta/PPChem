@@ -4,6 +4,7 @@ from ppchem.decks.deck_io import read_deck_records, write_deck_records
 from ppchem.decks.deck_mutations import (
     add_reaction_to_decks_file,
     choose_unique_deck_id,
+    delete_deck_from_file,
     find_decks_referencing_reaction,
     make_deck_id_from_name,
     remove_reaction_from_all_decks_file,
@@ -179,3 +180,33 @@ def test_remove_reaction_from_all_decks_file_cleans_all_references(tmp_path: Pat
     assert decks[0].reaction_ids == ["base_1"]
     assert decks[1].reaction_ids == []
     assert decks[2].reaction_ids == ["base_9"]
+
+
+def test_delete_deck_from_file_removes_only_the_selected_deck(tmp_path: Path) -> None:
+    decks_path = tmp_path / "decks.json"
+    write_deck_records(
+        [
+            DeckRecord(deck_id="starter", name="Starter", reaction_ids=["base_1", "user_2"]),
+            DeckRecord(deck_id="review", name="Review", reaction_ids=["base_3"]),
+        ],
+        decks_path,
+    )
+
+    result = delete_deck_from_file(decks_path, selected_deck_id="starter")
+    decks = read_deck_records(decks_path)
+
+    assert result.deleted_deck is True
+    assert result.deck.deck_id == "starter"
+    assert [deck.deck_id for deck in decks] == ["review"]
+    assert decks[0].reaction_ids == ["base_3"]
+
+
+def test_delete_deck_from_file_requires_selected_deck(tmp_path: Path) -> None:
+    decks_path = tmp_path / "decks.json"
+
+    try:
+        delete_deck_from_file(decks_path, selected_deck_id="")
+    except ValueError:
+        return
+
+    raise AssertionError("Expected missing deck selection to raise ValueError")

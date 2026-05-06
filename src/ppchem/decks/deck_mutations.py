@@ -27,6 +27,12 @@ class DeckBulkRemovalResult:
     removed_reaction: bool
 
 
+@dataclass(frozen=True)
+class DeckDeletionResult:
+    deck: DeckRecord
+    deleted_deck: bool
+
+
 def make_deck_id_from_name(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
     return normalized or "deck"
@@ -129,6 +135,28 @@ def remove_reaction_from_decks_file(
 
 def find_decks_referencing_reaction(decks: list[DeckRecord], reaction_id: str) -> list[DeckRecord]:
     return [deck for deck in decks if reaction_id in deck.reaction_ids]
+
+
+def delete_deck_from_file(
+    path: str | Path,
+    *,
+    selected_deck_id: str,
+) -> DeckDeletionResult:
+    decks_path = Path(path)
+    decks = read_deck_records(decks_path) if decks_path.exists() else []
+
+    chosen_deck_id = selected_deck_id.strip()
+    if not chosen_deck_id:
+        raise ValueError("Choose a deck to delete")
+
+    target_deck = next((deck for deck in decks if deck.deck_id == chosen_deck_id), None)
+    if target_deck is None:
+        raise ValueError(f"Could not find deck: {chosen_deck_id}")
+
+    updated_decks = [deck for deck in decks if deck.deck_id != chosen_deck_id]
+    write_deck_records(updated_decks, decks_path)
+
+    return DeckDeletionResult(deck=target_deck, deleted_deck=True)
 
 
 def remove_reaction_from_all_decks_file(

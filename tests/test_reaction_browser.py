@@ -1,7 +1,11 @@
 from ppchem.app.reaction_browser import (
     BrowserFilters,
     choose_selected_record,
+    build_browser_page_signature,
+    compute_browser_reactant_slider_state,
+    compute_browser_pagination,
     filter_reactions,
+    paginate_reactions,
     reaction_label,
     reaction_search_text,
     records_to_table,
@@ -148,3 +152,61 @@ def test_records_to_table_uses_reliable_counts() -> None:
     assert table.iloc[0]["source"] == "base"
     assert table.iloc[0]["reactants"] == 1
     assert table.iloc[0]["products"] == 1
+
+
+def test_build_browser_page_signature_tracks_filter_and_page_size_changes() -> None:
+    signature = build_browser_page_signature(
+        BrowserFilters(search_text=" Oxidation ", max_reactants=2, source="user"),
+        page_size=50,
+    )
+
+    assert signature == ("oxidation", 2, "user", 50)
+
+
+def test_compute_browser_pagination_clamps_page_index_and_range() -> None:
+    pagination = compute_browser_pagination(total_results=2347, page_size=500, requested_page_index=99)
+
+    assert pagination.page_index == 4
+    assert pagination.total_pages == 5
+    assert pagination.start_index == 2000
+    assert pagination.end_index == 2347
+
+
+def test_compute_browser_pagination_handles_empty_results() -> None:
+    pagination = compute_browser_pagination(total_results=0, page_size=100, requested_page_index=3)
+
+    assert pagination.page_index == 0
+    assert pagination.total_pages == 1
+    assert pagination.start_index == 0
+    assert pagination.end_index == 0
+
+
+def test_paginate_reactions_returns_only_visible_page_records() -> None:
+    records = [
+        _record(f"base_{index}", "CCO>>CC=O", ["CCO"], ["CC=O"])
+        for index in range(1, 11)
+    ]
+    pagination = compute_browser_pagination(total_results=len(records), page_size=3, requested_page_index=2)
+
+    visible = paginate_reactions(records, pagination)
+
+    assert [record.reaction_id for record in visible] == ["base_7", "base_8", "base_9"]
+
+
+def test_compute_browser_reactant_slider_state_uses_dataset_max_and_clamps_value() -> None:
+    records = [
+        _record("base_1", "CCO>>CC=O", ["CCO"], ["CC=O"]),
+        _record("base_2", "CCN.CCO.CCCl.CBr>>CC=N", ["CCN", "CCO", "CCCl", "CBr"], ["CC=N"]),
+    ]
+
+    state = compute_browser_reactant_slider_state(records, requested_value=10)
+
+    assert state.max_value == 4
+    assert state.current_value == 4
+
+
+def test_compute_browser_reactant_slider_state_uses_safe_fallback_for_empty_records() -> None:
+    state = compute_browser_reactant_slider_state([], requested_value=None)
+
+    assert state.max_value == 3
+    assert state.current_value == 3

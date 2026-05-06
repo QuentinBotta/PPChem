@@ -2,8 +2,8 @@
   {
     "reaction_id": "user_1",
     "source": "user",
-    "created_by": "streamlit_app",
-    "created_at": "2026-04-22T10:45:18Z",
+    "created_by": "deck_package_import",
+    "created_at": "2026-05-06T08:33:54Z",
     "reaction_smiles": "CC=O.CO[Al](OC)OC>>CCOC(C)=O",
     "reactants_smiles": [
       "CC=O",
@@ -27,7 +27,165 @@
     "provenance": {
       "dataset": "user",
       "dataset_record_id": "user_1",
+      "import_version": "deck_package_v1",
+      "package_original_reaction_id": "user_1",
+      "package_reaction_id": "user_1",
+      "package_original_source": "user"
+    },
+    "extensions": {
+      "conditions": null,
+      "catalyst": null,
+      "mechanism": null,
+      "references": []
+    }
+  },
+  {
+    "reaction_id": "user_2",
+    "source": "user",
+    "created_by": "deck_package_import",
+    "created_at": "2026-05-06T08:33:54Z",
+    "reaction_smiles": "CC(=O)C.CCO>>CC(=O)COCC",
+    "reactants_smiles": [
+      "CC(=O)C",
+      "CCO"
+    ],
+    "products_smiles": [
+      "CC(=O)COCC"
+    ],
+    "display_name": "test",
+    "reaction_class": null,
+    "tags": [],
+    "difficulty": null,
+    "hint": null,
+    "notes": null,
+    "quality": {
+      "is_validated": true,
+      "validation_messages": []
+    },
+    "provenance": {
+      "dataset": "user",
+      "dataset_record_id": "user_2",
+      "import_version": "deck_package_v1",
+      "package_original_reaction_id": "user_2",
+      "package_reaction_id": "user_2",
+      "package_original_source": "user"
+    },
+    "extensions": {
+      "conditions": null,
+      "catalyst": null,
+      "mechanism": null,
+      "references": []
+    }
+  },
+  {
+    "reaction_id": "user_3",
+    "source": "user",
+    "created_by": "streamlit_app",
+    "created_at": "2026-05-06T10:11:22Z",
+    "reaction_smiles": "CC.C=C.CCC.C=CC>>CCCCC",
+    "reactants_smiles": [
+      "CC",
+      "C=C",
+      "CCC",
+      "C=CC"
+    ],
+    "products_smiles": [
+      "CCCCC"
+    ],
+    "display_name": "4reac",
+    "reaction_class": null,
+    "tags": [],
+    "difficulty": null,
+    "hint": null,
+    "notes": null,
+    "quality": {
+      "is_validated": true,
+      "validation_messages": []
+    },
+    "provenance": {
+      "dataset": "user",
+      "dataset_record_id": "user_3",
       "import_version": "manual_entry_v1"
+    },
+    "extensions": {
+      "conditions": null,
+      "catalyst": null,
+      "mechanism": null,
+      "references": []
+    }
+  },
+  {
+    "reaction_id": "user_4",
+    "source": "user",
+    "created_by": "streamlit_app",
+    "created_at": "2026-05-06T10:24:35Z",
+    "reaction_smiles": "C1CC1.C1CC1.C1CC1.C1CC1.C1CC1>>C1CCC1",
+    "reactants_smiles": [
+      "C1CC1",
+      "C1CC1",
+      "C1CC1",
+      "C1CC1",
+      "C1CC1"
+    ],
+    "products_smiles": [
+      "C1CCC1"
+    ],
+    "display_name": "5reac",
+    "reaction_class": null,
+    "tags": [],
+    "difficulty": null,
+    "hint": null,
+    "notes": null,
+    "quality": {
+      "is_validated": true,
+      "validation_messages": []
+    },
+    "provenance": {
+      "dataset": "user",
+      "dataset_record_id": "user_4",
+      "import_version": "manual_entry_v1"
+    },
+    "extensions": {
+      "conditions": null,
+      "catalyst": null,
+      "mechanism": null,
+      "references": []
+    }
+  },
+  {
+    "reaction_id": "user_5",
+    "source": "user",
+    "created_by": "deck_package_import",
+    "created_at": "2026-05-06T10:40:26Z",
+    "reaction_smiles": "C1CC1.C1CC1.C1CC1.C1CC1.C1CC1.C1CC1>>CC(=O)COCC",
+    "reactants_smiles": [
+      "C1CC1",
+      "C1CC1",
+      "C1CC1",
+      "C1CC1",
+      "C1CC1",
+      "C1CC1"
+    ],
+    "products_smiles": [
+      "CC(=O)COCC"
+    ],
+    "display_name": "6reac",
+    "reaction_class": null,
+    "tags": [],
+    "difficulty": null,
+    "hint": null,
+    "notes": null,
+    "quality": {
+      "is_validated": true,
+      "validation_messages": []
+    },
+    "provenance": {
+      "dataset": "user",
+      "dataset_record_id": "user_5",
+      "import_version": "deck_package_v1",
+      "package_original_reaction_id": "user_3",
+      "package_reaction_id": "user_3",
+      "package_original_source": "user"
     },
     "extensions": {
       "conditions": null,

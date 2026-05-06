@@ -5,6 +5,13 @@ from pathlib import Path
 
 import streamlit as st
 
+try:
+    from streamlit_ketcher import st_ketcher
+    KETCHER_IMPORT_ERROR = None
+except Exception as exc:
+    st_ketcher = None
+    KETCHER_IMPORT_ERROR = exc
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SRC_DIR = ROOT_DIR / "src"
@@ -31,19 +38,45 @@ from ppchem.app.quiz_progress import (
     record_quiz_result_in_store,
     summarize_reaction_study_status,
 )
-from ppchem.app.reaction_browser import BrowserFilters, choose_selected_record, filter_reactions, load_reactions, records_to_table
+from ppchem.app.reaction_browser import (
+    BrowserFilters,
+    build_browser_page_signature,
+    choose_selected_record,
+    compute_browser_pagination,
+    compute_browser_reactant_slider_state,
+    filter_reactions,
+    load_reactions,
+    paginate_reactions,
+    records_to_table,
+)
 from ppchem.app.rendering import build_molecule_grid_image, build_reaction_image
 from ppchem.app.reaction_sources import (
     append_user_reaction,
+    build_reaction_smiles_from_visual_inputs,
     build_updated_user_reaction_record,
     delete_user_reaction_with_deck_cleanup,
     load_app_reactions,
     update_user_reaction_in_store,
 )
 from ppchem.decks.deck_io import read_deck_records
-from ppchem.decks.deck_mutations import add_reaction_to_decks_file, find_decks_referencing_reaction, remove_reaction_from_decks_file
+from ppchem.decks.deck_mutations import (
+    add_reaction_to_decks_file,
+    delete_deck_from_file,
+    find_decks_referencing_reaction,
+    remove_reaction_from_decks_file,
+)
 from ppchem.decks.deck_resolution import build_reaction_lookup, resolve_deck_records
 from ppchem.decks.deck_schema import DeckRecord
+from ppchem.decks.deck_transfer import (
+    DECK_COLLISION_CHOICE_MERGE,
+    DECK_COLLISION_CHOICE_SEPARATE,
+    DUPLICATE_DECISION_IMPORT_AS_NEW,
+    DUPLICATE_DECISION_USE_EXISTING,
+    PortableDeckImportAnalysis,
+    analyze_deck_package_import,
+    export_deck_package_json,
+    finalize_deck_package_import_into_store,
+)
 from ppchem.models.reaction_schema import ReactionRecord
 
 try:
@@ -133,23 +166,6 @@ def render_reaction_core_detail(record: ReactionRecord, progress_by_id: dict[str
     st.subheader("Reaction SMILES")
     st.code(record.reaction_smiles, language="text")
     render_reaction_study_summary(record, progress_by_id)
-
-    left, right = st.columns(2)
-    with left:
-        render_molecule_grid("Reactants", record.reactants_smiles)
-    with right:
-        render_molecule_grid("Products", record.products_smiles)
-
-    with st.expander("Provenance and quality", expanded=False):
-        st.json(
-            {
-                "reaction_id": record.reaction_id,
-                "source": record.source,
-                "created_by": record.created_by,
-                "provenance": record.provenance,
-                "quality": record.quality,
-            }
-        )
 
 
 def format_tags_for_input(tags: list[str]) -> str:
@@ -470,21 +486,44 @@ def render_deck_inspector_panel(
     st.rerun()
 
 
+def duplicate_decision_label(choice: str, existing_record: ReactionRecord) -> str:
+    if choice == DUPLICATE_DECISION_USE_EXISTING:
+        return "Use existing local reaction"
+    if choice == DUPLICATE_DECISION_IMPORT_AS_NEW:
+        return "Import as new duplicate anyway"
+    return choice
+
+
+def summarize_reaction_for_conflict_ui(record: ReactionRecord, *, max_length: int = 70) -> str:
+    if record.display_name:
+        return record.display_name
+
+    preview = record.reaction_smiles
+    if len(preview) > max_length:
+        preview = preview[: max_length - 3] + "..."
+    return preview
+
+
 def render_decks(
     records: list[ReactionRecord],
     progress_by_id: dict[str, object],
     decks: list[DeckRecord],
     decks_path: Path,
+    user_path: Path,
 ) -> None:
     st.subheader("Decks")
-    st.caption("Inspect saved decks, select reactions from them, and remove the selected reaction when needed.")
+    st.caption("Inspect saved decks, export portable deck packages, and import shared decks with explicit duplicate resolution.")
 
     if not decks:
-        st.info("No decks are available yet. Add reactions to a deck from Browser mode first.")
-        return
+        st.info("No decks are available yet. You can still import a deck definition below, or add reactions to a deck from Browser mode first.")
 
     message_key = "decks_tab_inspector_message"
     level_key = "decks_tab_inspector_level"
+    transfer_message_key = "decks_tab_transfer_message"
+    transfer_level_key = "decks_tab_transfer_level"
+    transfer_analysis_key = "decks_tab_transfer_analysis"
+    pending_selected_deck_key = "decks_tab_pending_selected_deck_id"
+    confirm_delete_deck_key = "decks_tab_confirm_delete_deck_id"
 
     deck_action_message = st.session_state.pop(message_key, None)
     deck_action_level = st.session_state.pop(level_key, "success")
@@ -496,9 +535,24 @@ def render_decks(
         else:
             st.success(deck_action_message)
 
+    transfer_message = st.session_state.pop(transfer_message_key, None)
+    transfer_level = st.session_state.pop(transfer_level_key, "success")
+    if transfer_message:
+        if transfer_level == "warning":
+            st.warning(transfer_message)
+        elif transfer_level == "info":
+            st.info(transfer_message)
+        else:
+            st.success(transfer_message)
+
+    reaction_lookup = build_reaction_lookup(records)
     deck_options = [""] + [deck.deck_id for deck in decks]
     deck_labels = {"": "Choose a deck to inspect"}
     deck_labels.update({deck.deck_id: deck.name for deck in decks})
+
+    pending_selected_deck_id = st.session_state.pop(pending_selected_deck_key, None)
+    if pending_selected_deck_id is not None:
+        st.session_state.decks_tab_selected_deck_id = pending_selected_deck_id
 
     selected_deck_id = st.selectbox(
         "Deck",
@@ -507,16 +561,219 @@ def render_decks(
         key="decks_tab_selected_deck_id",
     )
 
+    selected_deck = next((deck for deck in decks if deck.deck_id == selected_deck_id), None)
+
+    with st.expander("Transfer Portable Deck Packages", expanded=False):
+        st.caption("Portable deck packages include deck metadata plus the full reaction payloads needed by the deck.")
+        export_col, import_col = st.columns(2)
+        with export_col:
+            st.markdown("**Export**")
+            if selected_deck is None:
+                st.caption("Choose a deck above to enable portable deck export.")
+            else:
+                try:
+                    export_payload = export_deck_package_json(
+                        selected_deck,
+                        reaction_lookup=reaction_lookup,
+                    )
+                except ValueError as exc:
+                    st.warning(str(exc))
+                else:
+                    st.download_button(
+                        "Download portable deck package",
+                        data=export_payload,
+                        file_name=f"{selected_deck.deck_id}.deck.json",
+                        mime="application/json",
+                        key=f"download_deck_{selected_deck.deck_id}",
+                    )
+                    st.caption(
+                        f"Exports `{selected_deck.deck_id}` with {len(selected_deck.reaction_ids)} deck reference(s) and bundled reaction payloads."
+                    )
+        with import_col:
+            st.markdown("**Import**")
+            uploaded_file = st.file_uploader(
+                "Portable deck package JSON",
+                type=["json"],
+                key="decks_tab_import_file",
+            )
+            if st.button("Analyze import package", key="decks_tab_import_analyze_button"):
+                if uploaded_file is None:
+                    st.warning("Choose a portable deck package JSON file to analyze.")
+                else:
+                    try:
+                        raw_json = uploaded_file.getvalue().decode("utf-8")
+                        analysis = analyze_deck_package_import(
+                            raw_json=raw_json,
+                            local_records=records,
+                            existing_decks=decks,
+                        )
+                    except (UnicodeDecodeError, ValueError) as exc:
+                        st.warning(str(exc))
+                    else:
+                        st.session_state[transfer_analysis_key] = analysis
+                        st.rerun()
+
+        analysis = st.session_state.get(transfer_analysis_key)
+        if isinstance(analysis, PortableDeckImportAnalysis):
+            st.write(
+                f"Package deck: `{analysis.package.deck_id}` | "
+                f"refs: {len(analysis.package.reaction_refs)} | "
+                f"bundled reactions: {len(analysis.package.reactions)} | "
+                f"duplicate candidates: {len(analysis.duplicate_candidates)}"
+            )
+
+            if analysis.deck_collision_candidates:
+                st.markdown("**Deck collision handling**")
+                with st.container(border=True):
+                    collision_options = [candidate.deck_id for candidate in analysis.deck_collision_candidates]
+                    collision_labels = {
+                        candidate.deck_id: (
+                            f"{candidate.name} ({candidate.deck_id}) | "
+                            + ", ".join(candidate.collision_reasons)
+                        )
+                        for candidate in analysis.deck_collision_candidates
+                    }
+                    st.caption(
+                        "This imported deck conflicts with an existing local deck by visible name and/or deck identity. "
+                        "Choose whether to merge into an existing deck or create a clearly separate imported deck."
+                    )
+                    st.radio(
+                        "Deck collision choice",
+                        [DECK_COLLISION_CHOICE_MERGE, DECK_COLLISION_CHOICE_SEPARATE],
+                        format_func=lambda choice: {
+                            DECK_COLLISION_CHOICE_MERGE: "Merge into existing deck",
+                            DECK_COLLISION_CHOICE_SEPARATE: "Create separate imported deck",
+                        }[choice],
+                        key="decks_tab_deck_collision_choice",
+                    )
+                    if st.session_state.get("decks_tab_deck_collision_choice", DECK_COLLISION_CHOICE_MERGE) == DECK_COLLISION_CHOICE_MERGE:
+                        st.selectbox(
+                            "Existing deck to merge into",
+                            collision_options,
+                            format_func=lambda deck_id: collision_labels[deck_id],
+                            key="decks_tab_merge_target_deck_id",
+                        )
+                    else:
+                        st.caption(
+                            f"Separate import will create a distinct deck name based on "
+                            f"`{analysis.package.name} (Imported)`."
+                        )
+
+            if analysis.no_conflict_reaction_ids:
+                st.caption(
+                    "New reactions with no exact local reaction_smiles match: "
+                    + ", ".join(analysis.no_conflict_reaction_ids[:5])
+                    + (" ..." if len(analysis.no_conflict_reaction_ids) > 5 else "")
+                )
+
+            if analysis.duplicate_candidates:
+                st.markdown("**Duplicate resolution**")
+                for candidate in analysis.duplicate_candidates:
+                    with st.container(border=True):
+                        imported_label = summarize_reaction_for_conflict_ui(candidate.imported_reaction)
+                        existing_label = summarize_reaction_for_conflict_ui(candidate.existing_local_reaction)
+                        st.write(
+                            f"Imported reaction: {imported_label}"
+                        )
+                        st.caption(
+                            f"Package ref: {candidate.package_reaction_id} | "
+                            f"Existing local match: {existing_label} ({candidate.existing_local_reaction.reaction_id})"
+                        )
+                        st.caption(candidate.imported_reaction.reaction_smiles)
+                        st.radio(
+                            f"Choice for {candidate.package_reaction_id}",
+                            [DUPLICATE_DECISION_USE_EXISTING, DUPLICATE_DECISION_IMPORT_AS_NEW],
+                            format_func=lambda choice, record=candidate.existing_local_reaction: duplicate_decision_label(choice, record),
+                            key=f"decks_tab_duplicate_choice_{candidate.package_reaction_id}",
+                        )
+            else:
+                st.caption("No exact reaction_smiles duplicates were found. Finalizing import will create new local user reactions for the package.")
+
+            control_col, clear_col = st.columns(2)
+            with control_col:
+                if st.button("Finalize portable deck import", key="decks_tab_finalize_import_button"):
+                    duplicate_decisions = {
+                        candidate.package_reaction_id: st.session_state.get(
+                            f"decks_tab_duplicate_choice_{candidate.package_reaction_id}",
+                            DUPLICATE_DECISION_USE_EXISTING,
+                        )
+                        for candidate in analysis.duplicate_candidates
+                    }
+                    try:
+                        result = finalize_deck_package_import_into_store(
+                            analysis=analysis,
+                            duplicate_decisions=duplicate_decisions,
+                            local_records=records,
+                            user_path=user_path,
+                            decks_path=decks_path,
+                            deck_collision_choice=st.session_state.get(
+                                "decks_tab_deck_collision_choice",
+                                DECK_COLLISION_CHOICE_SEPARATE,
+                            ),
+                            merge_target_deck_id=st.session_state.get("decks_tab_merge_target_deck_id"),
+                        )
+                    except ValueError as exc:
+                        st.warning(str(exc))
+                    else:
+                        cached_load_reactions.clear()
+                        cached_load_decks.clear()
+                        st.session_state[pending_selected_deck_key] = result.final_deck_id
+                        st.session_state.pop("decks_tab_selected_reaction_id", None)
+                        st.session_state.pop(transfer_analysis_key, None)
+                        st.session_state.pop("decks_tab_deck_collision_choice", None)
+                        st.session_state.pop("decks_tab_merge_target_deck_id", None)
+                        for candidate in analysis.duplicate_candidates:
+                            st.session_state.pop(f"decks_tab_duplicate_choice_{candidate.package_reaction_id}", None)
+                        st.session_state[transfer_level_key] = "success"
+                        if result.merged_into_existing_deck:
+                            if result.deck_reaction_ids_added_count == 0:
+                                st.session_state[transfer_level_key] = "info"
+                                st.session_state[transfer_message_key] = (
+                                    f"Merged imported deck `{analysis.package.name}` into "
+                                    f"`{result.final_deck.name}`, but all resolved reactions were already present in the target deck. "
+                                    f"No new deck memberships were added. "
+                                    f"Created {len(result.created_reactions)} new local reaction(s) and "
+                                    f"reused {len(result.used_existing_reaction_ids)} existing reaction(s)."
+                                )
+                            else:
+                                st.session_state[transfer_message_key] = (
+                                    f"Merged imported deck `{analysis.package.name}` into "
+                                    f"`{result.final_deck.name}` and added {result.deck_reaction_ids_added_count} reaction(s) to the target deck. "
+                                    f"Created {len(result.created_reactions)} new local reaction(s), "
+                                    f"reused {len(result.used_existing_reaction_ids)} existing reaction(s), "
+                                    f"final deck size {len(result.final_deck.reaction_ids)}."
+                                )
+                        else:
+                            rename_suffix = ""
+                            if result.deck_renamed or result.deck_name_changed:
+                                rename_suffix = (
+                                    f" (stored as {result.final_deck_name} / {result.final_deck_id})"
+                                )
+                            st.session_state[transfer_message_key] = (
+                                f"Imported portable deck `{analysis.package.name}`{rename_suffix}. "
+                                f"Created {len(result.created_reactions)} new local reaction(s), "
+                                f"reused {len(result.used_existing_reaction_ids)} existing reaction(s), "
+                                f"final deck size {len(result.final_deck.reaction_ids)}."
+                            )
+                        st.rerun()
+            with clear_col:
+                if st.button("Clear analyzed package", key="decks_tab_clear_import_analysis_button"):
+                    st.session_state.pop(transfer_analysis_key, None)
+                    st.session_state.pop("decks_tab_deck_collision_choice", None)
+                    st.session_state.pop("decks_tab_merge_target_deck_id", None)
+                    for candidate in analysis.duplicate_candidates:
+                        st.session_state.pop(f"decks_tab_duplicate_choice_{candidate.package_reaction_id}", None)
+                    st.rerun()
+
     if not selected_deck_id:
         st.caption("Choose a deck to inspect its contents.")
         return
 
-    selected_deck = next((deck for deck in decks if deck.deck_id == selected_deck_id), None)
     if selected_deck is None:
         st.warning("Could not find the selected deck.")
         return
 
-    resolution = resolve_deck_records(selected_deck, build_reaction_lookup(records))
+    resolution = resolve_deck_records(selected_deck, reaction_lookup)
 
     st.caption(
         f"Deck: {selected_deck.name} | Stored IDs: {len(selected_deck.reaction_ids)} | "
@@ -531,6 +788,45 @@ def render_decks(
             + ", ".join(resolution.missing_reaction_ids[:5])
             + (" ..." if len(resolution.missing_reaction_ids) > 5 else "")
         )
+
+    with st.expander("Delete Deck", expanded=False):
+        st.caption("Deleting a deck removes only the deck definition. Referenced reactions and quiz progress stay intact.")
+
+        if st.session_state.get(confirm_delete_deck_key) != selected_deck.deck_id:
+            if st.button("Prepare delete deck", key=f"decks_tab_prepare_delete_{selected_deck.deck_id}"):
+                st.session_state[confirm_delete_deck_key] = selected_deck.deck_id
+                st.rerun()
+        else:
+            st.warning(
+                f"Delete deck '{selected_deck.name}'? This removes only the deck definition from the app."
+            )
+            confirm_col, cancel_col = st.columns(2)
+            with confirm_col:
+                if st.button("Confirm delete deck", key=f"decks_tab_confirm_delete_{selected_deck.deck_id}"):
+                    try:
+                        result = delete_deck_from_file(
+                            decks_path,
+                            selected_deck_id=selected_deck.deck_id,
+                        )
+                    except ValueError as exc:
+                        st.warning(str(exc))
+                        return
+
+                    cached_load_decks.clear()
+                    st.session_state.pop(confirm_delete_deck_key, None)
+                    st.session_state[pending_selected_deck_key] = ""
+                    st.session_state.pop("decks_tab_selected_reaction_id", None)
+                    if st.session_state.get("quiz_selected_deck_id") == selected_deck.deck_id:
+                        st.session_state.quiz_selected_deck_id = ""
+                    st.session_state[level_key] = "success"
+                    st.session_state[message_key] = (
+                        f"Deleted deck '{result.deck.name}'. Referenced reactions and quiz progress were left unchanged."
+                    )
+                    st.rerun()
+            with cancel_col:
+                if st.button("Cancel delete", key=f"decks_tab_cancel_delete_{selected_deck.deck_id}"):
+                    st.session_state.pop(confirm_delete_deck_key, None)
+                    st.rerun()
 
     left, right = st.columns([1, 1])
     with left:
@@ -591,7 +887,7 @@ def render_decks(
 
 def render_add_reaction(records: list[ReactionRecord], user_path: Path) -> None:
     st.subheader("Add Reaction")
-    st.caption("Create a minimal user reaction by entering reaction SMILES.")
+    st.caption("Create a minimal user reaction with typed reaction SMILES or a bounded visual editor flow.")
 
     creation_message = st.session_state.pop("add_reaction_message", None)
     creation_level = st.session_state.pop("add_reaction_level", "success")
@@ -601,26 +897,95 @@ def render_add_reaction(records: list[ReactionRecord], user_path: Path) -> None:
         else:
             st.success(creation_message)
 
-    with st.form("add_user_reaction"):
+    input_mode = st.radio(
+        "Input mode",
+        ["SMILES", "Visual editor"],
+        horizontal=True,
+        key="add_reaction_input_mode",
+    )
+
+    reaction_smiles = ""
+    if input_mode == "SMILES":
         reaction_smiles = st.text_input(
             "Reaction SMILES",
             value="",
             placeholder="Example: CCO>>CC=O",
+            key="add_reaction_smiles_input",
         )
-        display_name = st.text_input(
-            "Display name (optional)",
-            value="",
-            placeholder="Optional user-authored name",
+    else:
+        st.caption(
+            "Visual mode uses the installed Ketcher Streamlit component for each side of the reaction. "
+            "Draw disconnected fragments on one side when you need multiple reactants or multiple products."
         )
-        tags_text = st.text_input(
-            "Tags (optional, comma-separated)",
-            value="",
-            placeholder="example: practice, named reaction, chapter 3",
-        )
-        submitted = st.form_submit_button("Save user reaction")
+        if st_ketcher is None:
+            st.warning(
+                "Visual editor is unavailable because `streamlit-ketcher` could not be imported. "
+                f"Import error: {KETCHER_IMPORT_ERROR}"
+            )
+            return
 
-    if not submitted:
+        reactant_col, product_col = st.columns(2)
+        with reactant_col:
+            st.markdown("**Reactants**")
+            reactants_smiles = st_ketcher(
+                "",
+                height=400,
+                molecule_format="SMILES",
+                key="add_reaction_visual_reactants",
+            )
+            st.caption("Returned editor value")
+            st.code(reactants_smiles or "", language="text")
+        with product_col:
+            st.markdown("**Products**")
+            products_smiles = st_ketcher(
+                "",
+                height=400,
+                molecule_format="SMILES",
+                key="add_reaction_visual_products",
+            )
+            st.caption("Returned editor value")
+            st.code(products_smiles or "", language="text")
+
+        try:
+            reaction_smiles = build_reaction_smiles_from_visual_inputs(
+                reactants_smiles=reactants_smiles or "",
+                products_smiles=products_smiles or "",
+            )
+        except ValueError:
+            reaction_smiles = ""
+
+        st.text_input(
+            "Composed reaction SMILES",
+            value=reaction_smiles,
+            disabled=True,
+            key="add_reaction_visual_preview",
+        )
+
+    display_name = st.text_input(
+        "Display name (optional)",
+        value="",
+        placeholder="Optional user-authored name",
+        key="add_reaction_display_name",
+    )
+    tags_text = st.text_input(
+        "Tags (optional, comma-separated)",
+        value="",
+        placeholder="example: practice, named reaction, chapter 3",
+        key="add_reaction_tags",
+    )
+
+    if not st.button("Save user reaction", key="add_user_reaction_submit"):
         return
+
+    if input_mode == "Visual editor":
+        try:
+            reaction_smiles = build_reaction_smiles_from_visual_inputs(
+                reactants_smiles=st.session_state.get("add_reaction_visual_reactants", ""),
+                products_smiles=st.session_state.get("add_reaction_visual_products", ""),
+            )
+        except ValueError as exc:
+            st.warning(str(exc))
+            return
 
     try:
         new_record = append_user_reaction(
@@ -659,19 +1024,6 @@ def render_reaction_detail(
 
     with st.expander("Add To Deck", expanded=False):
         render_deck_action_panel(record, decks, decks_path)
-
-    with st.expander("Inspect Deck", expanded=False):
-        render_deck_inspector_panel(
-            all_records,
-            progress_by_id,
-            decks,
-            decks_path,
-            title="Inspect Deck",
-            selectbox_label="Deck to inspect",
-            empty_selection_caption="Choose a deck to inspect its contents.",
-            remove_button_label="Remove selected reaction from deck",
-            state_prefix="browser_deck_inspector",
-        )
 
 
 def find_record_by_id(records: list[ReactionRecord], reaction_id: str | None) -> ReactionRecord | None:
@@ -1032,6 +1384,12 @@ def render_browser(
     decks_path: Path,
     user_path: Path,
 ) -> None:
+    slider_state = compute_browser_reactant_slider_state(
+        records,
+        requested_value=st.session_state.get("browser_max_reactants"),
+    )
+    st.session_state.browser_max_reactants = slider_state.current_value
+
     with st.sidebar:
         st.header("Filters")
         search_text = st.text_input("Search reaction ID or SMILES", "", key="browser_search_text")
@@ -1044,8 +1402,8 @@ def render_browser(
         max_reactants = st.slider(
             "Maximum reactant components",
             min_value=1,
-            max_value=3,
-            value=3,
+            max_value=slider_state.max_value,
+            value=slider_state.current_value,
             key="browser_max_reactants",
         )
         max_results = st.slider(
@@ -1061,19 +1419,41 @@ def render_browser(
         records,
         BrowserFilters(search_text=search_text, max_reactants=max_reactants, source=source_filter),
     )
-    table = records_to_table(filtered_records[:max_results])
+    page_signature = build_browser_page_signature(
+        BrowserFilters(search_text=search_text, max_reactants=max_reactants, source=source_filter),
+        page_size=max_results,
+    )
+    previous_signature = st.session_state.get("browser_page_signature")
+    if previous_signature != page_signature:
+        st.session_state.browser_page_index = 0
+        st.session_state.browser_page_signature = page_signature
+
+    pagination = compute_browser_pagination(
+        total_results=len(filtered_records),
+        page_size=max_results,
+        requested_page_index=st.session_state.get("browser_page_index", 0),
+    )
+    st.session_state.browser_page_index = pagination.page_index
+    visible_records = paginate_reactions(filtered_records, pagination)
+    table = records_to_table(visible_records)
 
     source_label = {"all": "all", "base": "base", "user": "user"}[source_filter]
-    st.write(
-        f"Showing {len(table)} of {len(filtered_records)} matching reactions from {len(records)} loaded records "
-        f"(source filter: {source_label})."
-    )
+    if pagination.total_results == 0:
+        st.write(
+            f"Showing 0 of 0 matching reactions from {len(records)} loaded records "
+            f"(source filter: {source_label})."
+        )
+    else:
+        st.write(
+            f"Showing {pagination.start_index + 1}-{pagination.end_index} of {len(filtered_records)} matching reactions "
+            f"from {len(records)} loaded records (source filter: {source_label})."
+        )
 
     left, right = st.columns([1, 1])
     with left:
         st.subheader("Reactions")
         selected_record = None
-        if filtered_records:
+        if visible_records:
             previous_selected_id = st.session_state.get("browser_selected_reaction_id")
             table_event = st.dataframe(
                 table,
@@ -1085,7 +1465,7 @@ def render_browser(
             )
             selected_rows = list(table_event.selection.rows)
             selected_record = choose_selected_record(
-                filtered_records[:max_results],
+                visible_records,
                 selected_rows=selected_rows,
                 previous_reaction_id=previous_selected_id,
             )
@@ -1093,6 +1473,22 @@ def render_browser(
                 st.session_state.browser_selected_reaction_id = selected_record.reaction_id
         else:
             st.warning("No reactions match the current filters.")
+
+        page_status_col, prev_col, next_col = st.columns([2, 1, 1])
+        with page_status_col:
+            st.caption(f"Page {pagination.page_index + 1} of {pagination.total_pages}")
+        with prev_col:
+            if st.button("Previous page", key="browser_previous_page", disabled=pagination.page_index == 0):
+                st.session_state.browser_page_index = max(0, pagination.page_index - 1)
+                st.rerun()
+        with next_col:
+            if st.button(
+                "Next page",
+                key="browser_next_page",
+                disabled=pagination.page_index >= pagination.total_pages - 1 or pagination.total_results == 0,
+            ):
+                st.session_state.browser_page_index = min(pagination.total_pages - 1, pagination.page_index + 1)
+                st.rerun()
 
     with right:
         if selected_record is not None:
@@ -1128,7 +1524,7 @@ def main() -> None:
     with quiz_tab:
         render_quiz(records, decks, QUIZ_PROGRESS_PATH)
     with decks_tab:
-        render_decks(records, progress_by_id, decks, DECKS_PATH)
+        render_decks(records, progress_by_id, decks, DECKS_PATH, USER_DATASET_PATH)
     with add_reaction_tab:
         render_add_reaction(records, USER_DATASET_PATH)
 

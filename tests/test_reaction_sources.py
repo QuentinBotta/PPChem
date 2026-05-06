@@ -2,6 +2,8 @@ from pathlib import Path
 
 from ppchem.app.reaction_sources import (
     append_user_reaction,
+    build_reaction_smiles_from_visual_inputs,
+    build_imported_user_reaction_record,
     build_updated_user_reaction_record,
     build_user_reaction_record,
     delete_user_reaction_with_deck_cleanup,
@@ -100,6 +102,28 @@ def test_split_reaction_smiles_rejects_missing_separator() -> None:
     raise AssertionError("Expected invalid reaction SMILES to raise ValueError")
 
 
+def test_build_reaction_smiles_from_visual_inputs_combines_both_sides() -> None:
+    reaction_smiles = build_reaction_smiles_from_visual_inputs(
+        reactants_smiles="CCO.O",
+        products_smiles="CC=O",
+    )
+
+    assert reaction_smiles == "CCO.O>>CC=O"
+
+
+def test_build_reaction_smiles_from_visual_inputs_rejects_missing_side() -> None:
+    try:
+        build_reaction_smiles_from_visual_inputs(
+            reactants_smiles="",
+            products_smiles="CC=O",
+        )
+    except ValueError as exc:
+        assert "reactant" in str(exc).lower()
+        return
+
+    raise AssertionError("Expected missing visual reactants to raise ValueError")
+
+
 def test_build_user_reaction_record_creates_user_metadata() -> None:
     record = build_user_reaction_record(
         reaction_smiles="CCO>>CC=O",
@@ -135,6 +159,26 @@ def test_append_user_reaction_writes_to_user_store(tmp_path: Path) -> None:
     assert new_record.display_name == "My saved reaction"
     assert new_record.tags == ["tag one", "tag two"]
     assert [record.reaction_id for record in loaded] == ["user_1"]
+
+
+def test_build_imported_user_reaction_record_assigns_new_user_identity() -> None:
+    source = _record("base_7")
+    source.display_name = "Imported"
+    source.tags = ["shared", "deck"]
+
+    imported = build_imported_user_reaction_record(
+        source,
+        existing_records=[_record("base_1"), _record("user_1")],
+        package_reaction_id="pkg_rxn_1",
+    )
+
+    assert imported.reaction_id == "user_2"
+    assert imported.source == "user"
+    assert imported.created_by == "deck_package_import"
+    assert imported.display_name == "Imported"
+    assert imported.tags == ["shared", "deck"]
+    assert imported.provenance["package_reaction_id"] == "pkg_rxn_1"
+    assert imported.provenance["package_original_reaction_id"] == "base_7"
 
 
 def test_normalize_user_tags_trims_drops_empty_and_deduplicates() -> None:

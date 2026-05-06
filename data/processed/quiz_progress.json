@@ -27,16 +27,16 @@
   },
   "base_3": {
     "reaction_id": "base_3",
-    "times_seen": 6,
+    "times_seen": 7,
     "count_again": 1,
-    "count_hard": 1,
+    "count_hard": 2,
     "count_good": 0,
     "count_easy": 4,
-    "last_grade": null,
-    "last_seen_at": "2026-04-29T10:33:00Z",
-    "last_reviewed_at": "2026-04-29T10:33:00Z",
-    "due_at": "2026-09-11T10:33:00Z",
-    "interval_days": 135.0
+    "last_grade": "hard",
+    "last_seen_at": "2026-05-06T10:00:41Z",
+    "last_reviewed_at": "2026-05-06T10:00:41Z",
+    "due_at": "2026-11-24T22:00:41Z",
+    "interval_days": 202.5
   },
   "base_30": {
     "reaction_id": "base_30",
@@ -53,16 +53,16 @@
   },
   "base_33": {
     "reaction_id": "base_33",
-    "times_seen": 1,
+    "times_seen": 2,
     "count_again": 1,
-    "count_hard": 0,
+    "count_hard": 1,
     "count_good": 0,
     "count_easy": 0,
-    "last_grade": "again",
-    "last_seen_at": "2026-04-29T11:10:37Z",
-    "last_reviewed_at": "2026-04-29T11:10:37Z",
-    "due_at": "2026-04-29T11:15:37Z",
-    "interval_days": 0.003472222222222222
+    "last_grade": "hard",
+    "last_seen_at": "2026-05-06T09:53:50Z",
+    "last_reviewed_at": "2026-05-06T09:53:50Z",
+    "due_at": "2026-05-07T09:53:50Z",
+    "interval_days": 1.0
   },
   "base_47": {
     "reaction_id": "base_47",
@@ -131,15 +131,28 @@
   },
   "user_1": {
     "reaction_id": "user_1",
-    "times_seen": 2,
+    "times_seen": 3,
     "count_again": 1,
+    "count_hard": 0,
+    "count_good": 1,
+    "count_easy": 1,
+    "last_grade": "easy",
+    "last_seen_at": "2026-05-06T09:54:22Z",
+    "last_reviewed_at": "2026-05-06T09:54:22Z",
+    "due_at": "2026-05-15T09:54:22Z",
+    "interval_days": 9.0
+  },
+  "user_2": {
+    "reaction_id": "user_2",
+    "times_seen": 1,
+    "count_again": 0,
     "count_hard": 0,
     "count_good": 1,
     "count_easy": 0,
     "last_grade": "good",
-    "last_seen_at": "2026-04-29T11:00:30Z",
-    "last_reviewed_at": "2026-04-29T11:00:30Z",
-    "due_at": "2026-05-02T11:00:30Z",
+    "last_seen_at": "2026-05-06T09:59:37Z",
+    "last_reviewed_at": "2026-05-06T09:59:37Z",
+    "due_at": "2026-05-09T09:59:37Z",
     "interval_days": 3.0
   }
 }
