@@ -1,3 +1,9 @@
+"""Helpers that mutate persisted deck files without changing reaction data.
+
+These functions centralize deck edits so the Streamlit UI does not have to
+manually reason about ID generation, duplicate entries, or JSON persistence.
+"""
+
 from __future__ import annotations
 
 import re
@@ -34,11 +40,13 @@ class DeckDeletionResult:
 
 
 def make_deck_id_from_name(name: str) -> str:
+    """Create a filesystem-friendly deck identifier from a visible name."""
     normalized = re.sub(r"[^a-z0-9]+", "_", name.strip().lower()).strip("_")
     return normalized or "deck"
 
 
 def choose_unique_deck_id(base_deck_id: str, existing_deck_ids: set[str]) -> str:
+    """Add a numeric suffix until the deck ID is unique within the store."""
     if base_deck_id not in existing_deck_ids:
         return base_deck_id
 
@@ -57,6 +65,11 @@ def add_reaction_to_decks_file(
     selected_deck_id: str = "",
     new_deck_name: str = "",
 ) -> DeckUpdateResult:
+    """Add one reaction ID to an existing deck or a newly created deck.
+
+    Reaction membership is keyed by `reaction_id`, not by where the reaction
+    currently appears in a filtered list or paginated browser table.
+    """
     decks_path = Path(path)
     decks = read_deck_records(decks_path) if decks_path.exists() else []
 
@@ -82,6 +95,8 @@ def add_reaction_to_decks_file(
         updated_deck = target_deck
         added_reaction = False
     else:
+        # Preserve existing order and append the new reference once. Decks act
+        # like ordered study lists, so we avoid re-sorting here.
         updated_deck = DeckRecord(
             deck_id=target_deck.deck_id,
             name=target_deck.name,
@@ -102,6 +117,7 @@ def remove_reaction_from_decks_file(
     reaction_id: str,
     selected_deck_id: str,
 ) -> DeckRemovalResult:
+    """Remove one reaction ID from one selected deck, leaving other decks alone."""
     decks_path = Path(path)
     decks = read_deck_records(decks_path) if decks_path.exists() else []
 
@@ -134,6 +150,7 @@ def remove_reaction_from_decks_file(
 
 
 def find_decks_referencing_reaction(decks: list[DeckRecord], reaction_id: str) -> list[DeckRecord]:
+    """Return every deck that currently contains the given reaction ID."""
     return [deck for deck in decks if reaction_id in deck.reaction_ids]
 
 
@@ -142,6 +159,7 @@ def delete_deck_from_file(
     *,
     selected_deck_id: str,
 ) -> DeckDeletionResult:
+    """Delete a whole deck definition by deck ID."""
     decks_path = Path(path)
     decks = read_deck_records(decks_path) if decks_path.exists() else []
 
@@ -164,6 +182,11 @@ def remove_reaction_from_all_decks_file(
     *,
     reaction_id: str,
 ) -> DeckBulkRemovalResult:
+    """Remove a reaction ID from every deck that references it.
+
+    This is used when deleting a user reaction so no deck keeps a dangling
+    reference to an ID that no longer exists locally.
+    """
     decks_path = Path(path)
     decks = read_deck_records(decks_path) if decks_path.exists() else []
 

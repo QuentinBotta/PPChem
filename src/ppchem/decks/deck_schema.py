@@ -1,3 +1,10 @@
+"""Schema for persistent reaction decks.
+
+Decks store only deck metadata plus ordered `reaction_id` references. They do
+not duplicate full reaction payloads, which keeps decks small and lets edited
+reactions show up everywhere that references the same stable identity.
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -6,6 +13,8 @@ from typing import Any
 
 @dataclass
 class DeckRecord:
+    """User-visible deck definition persisted as JSON."""
+
     deck_id: str
     name: str
     description: str = ""
@@ -13,6 +22,7 @@ class DeckRecord:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "DeckRecord":
+        """Load one deck from JSON and validate its reaction reference list."""
         required = ["deck_id", "name", "reaction_ids"]
         missing = [key for key in required if key not in value]
         if missing:
@@ -34,4 +44,5 @@ class DeckRecord:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the deck back to plain JSON data."""
         return asdict(self)

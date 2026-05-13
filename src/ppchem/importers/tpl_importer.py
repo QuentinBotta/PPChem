@@ -1,3 +1,10 @@
+"""Convert external TPL-style CSV data into internal reaction JSON.
+
+This is the only place that should touch raw CSV input. The rest of the app
+works with validated `ReactionRecord` JSON so browser, decks, and quiz logic do
+not need to understand CSV quirks or source-specific column names.
+"""
+
 from __future__ import annotations
 
 import csv
@@ -26,6 +33,7 @@ ROW_ID_COLUMN_CANDIDATES = ["id", "tpl_id", "record_id"]
 
 
 def _detect_column(columns: list[str], candidates: list[str]) -> str | None:
+    """Pick the first matching column name using case-insensitive candidates."""
     normalized = {col.lower(): col for col in columns}
     for candidate in candidates:
         if candidate in normalized:
@@ -34,6 +42,7 @@ def _detect_column(columns: list[str], candidates: list[str]) -> str | None:
 
 
 def _split_reaction_smiles(reaction_smiles: str) -> tuple[list[str], list[str]]:
+    """Split a reaction SMILES string into reactant and product token lists."""
     left, right = reaction_smiles.split(">>", maxsplit=1)
     reactants = [token for token in left.split(".") if token]
     products = [token for token in right.split(".") if token]
@@ -41,6 +50,7 @@ def _split_reaction_smiles(reaction_smiles: str) -> tuple[list[str], list[str]]:
 
 
 def _is_missing(value: Any) -> bool:
+    """Treat `None`, blank strings, and pandas missing values as empty input."""
     if value is None:
         return True
     if isinstance(value, str) and value.strip() == "":
@@ -49,8 +59,11 @@ def _is_missing(value: Any) -> bool:
 
 
 def _validate_with_rdkit(reaction_smiles: str, reactants: list[str], products: list[str]) -> tuple[bool, list[str]]:
+    """Validate imported structures with RDKit when the optional dependency exists."""
     messages: list[str] = []
     if rdChemReactions is None or Chem is None:
+        # Import should still succeed offline, but the report records that full
+        # structural validation was unavailable in this environment.
         return False, ["rdkit_unavailable"]
 
     try:
@@ -70,6 +83,7 @@ def _validate_with_rdkit(reaction_smiles: str, reactants: list[str], products: l
 
 
 def _load_rows(csv_path: Path, max_rows: int | None) -> tuple[list[dict[str, Any]], list[str], str]:
+    """Load rows through pandas when available, otherwise use the csv module."""
     if pd is not None:
         frame = pd.read_csv(csv_path)
         if max_rows is not None:
@@ -136,6 +150,10 @@ def convert_tpl_csv(
         is_validated, messages = _validate_with_rdkit(reaction_smiles, reactants, products)
 
         row_id_value = row.get(row_id_col) if row_id_col else None
+        # Stable reaction IDs matter because decks point to `reaction_id` values,
+        # not row positions. If the source exposes a row identifier we use it;
+        # otherwise we fall back to the CSV row index as a weaker stability
+        # guarantee that depends on row order staying unchanged.
         record_id = str(row_id_value) if not _is_missing(row_id_value) else str(index)
 
         record = ReactionRecord(
@@ -146,6 +164,9 @@ def convert_tpl_csv(
             reaction_smiles=reaction_smiles,
             reactants_smiles=reactants,
             products_smiles=products,
+            # Unknown pedagogical metadata stays empty here on purpose. The
+            # importer only copies information that is explicitly present in the
+            # source dataset and does not guess chemistry meaning.
             display_name=None,
             reaction_class=None,
             tags=[],

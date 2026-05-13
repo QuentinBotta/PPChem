@@ -1,3 +1,10 @@
+"""Main Streamlit entrypoint for browsing, quizzing, and organizing reactions.
+
+This file composes the pure helper modules under `src/ppchem/app/` into the UI.
+It is responsible for Streamlit-specific concerns such as cached file loads,
+session-state transitions, and reruns after mutations.
+"""
+
 from __future__ import annotations
 
 import sys
@@ -98,20 +105,24 @@ QUIZ_PROGRESS_PATH = ROOT_DIR / "data" / "processed" / "quiz_progress.json"
 
 @st.cache_data(show_spinner="Loading reaction datasets...")
 def cached_load_reactions(base_path: str, user_path: str) -> list[ReactionRecord]:
+    """Cache merged base+user reaction loading until the underlying paths change."""
     return load_app_reactions(base_path=base_path, user_path=user_path)
 
 
 @st.cache_data(show_spinner="Loading decks...")
 def cached_load_decks(path: str) -> list[DeckRecord]:
+    """Cache deck loading for the current deck JSON path."""
     return read_deck_records(path)
 
 
 @st.cache_data(show_spinner="Loading quiz progress...")
 def cached_load_quiz_progress(path: str) -> dict[str, object]:
+    """Cache quiz progress loading for the current progress JSON path."""
     return load_quiz_progress(path)
 
 
 def render_molecule_grid(title: str, smiles_values: list[str]) -> None:
+    """Render a molecule grid and show text fallbacks for any unrendered SMILES."""
     st.subheader(title)
 
     result = build_molecule_grid_image(smiles_values, chem_module=Chem, draw_module=Draw)
@@ -124,6 +135,7 @@ def render_molecule_grid(title: str, smiles_values: list[str]) -> None:
 
 
 def render_reaction_image(record: ReactionRecord) -> None:
+    """Render one reaction image, or explain the fallback to text when needed."""
     result = build_reaction_image(record.reaction_smiles, reaction_module=rdChemReactions, draw_module=Draw)
 
     if result.image is not None:
@@ -138,6 +150,7 @@ def render_reaction_image(record: ReactionRecord) -> None:
 
 
 def render_reaction_study_summary(record: ReactionRecord, progress_by_id: dict[str, object]) -> None:
+    """Show the persisted study status for the selected reaction."""
     st.subheader("Study Progress")
 
     progress = progress_by_id.get(record.reaction_id)
@@ -155,6 +168,7 @@ def render_reaction_study_summary(record: ReactionRecord, progress_by_id: dict[s
 
 
 def render_reaction_core_detail(record: ReactionRecord, progress_by_id: dict[str, object]) -> None:
+    """Render the common reaction detail block shared by browser and deck views."""
     st.header(record.display_name or record.reaction_id)
 
     st.caption(
@@ -169,10 +183,12 @@ def render_reaction_core_detail(record: ReactionRecord, progress_by_id: dict[str
 
 
 def format_tags_for_input(tags: list[str]) -> str:
+    """Join stored tags into the editable comma-separated UI format."""
     return ", ".join(tags)
 
 
 def render_user_reaction_edit_panel(record: ReactionRecord, user_path: Path) -> None:
+    """Render the edit form for one user-authored reaction."""
     st.subheader("Edit Reaction")
     st.caption(
         "Only user-authored fields are editable here. "
@@ -224,6 +240,8 @@ def render_user_reaction_edit_panel(record: ReactionRecord, user_path: Path) -> 
         st.warning(str(exc))
         return
 
+    # The underlying JSON changed, so the merged reaction cache must be cleared
+    # before the rerun; otherwise Streamlit would redraw stale record data.
     cached_load_reactions.clear()
     st.session_state.browser_selected_reaction_id = record.reaction_id
     st.session_state.browser_edit_reaction_level = "success"
@@ -232,6 +250,7 @@ def render_user_reaction_edit_panel(record: ReactionRecord, user_path: Path) -> 
 
 
 def render_user_reaction_delete_panel(record: ReactionRecord, decks: list[DeckRecord], user_path: Path, decks_path: Path) -> None:
+    """Render a guarded delete flow for one user reaction."""
     st.subheader("Delete Reaction")
     st.caption("Deletion is available only for user reactions and is always keyed by reaction_id.")
 
@@ -248,6 +267,8 @@ def render_user_reaction_delete_panel(record: ReactionRecord, decks: list[DeckRe
         return
 
     confirm_key = f"browser_confirm_delete_{record.reaction_id}"
+    # Confirmation lives in session state so the warning survives Streamlit
+    # reruns between the "prepare" and "confirm" clicks.
     if not st.session_state.get(confirm_key, False):
         if st.button("Prepare delete", key=f"browser_prepare_delete_{record.reaction_id}"):
             st.session_state[confirm_key] = True
@@ -278,6 +299,8 @@ def render_user_reaction_delete_panel(record: ReactionRecord, decks: list[DeckRe
                 st.warning(str(exc))
                 return
 
+            # Reaction deletion can also mutate deck JSON because decks only
+            # store reaction IDs, so both caches must be invalidated together.
             cached_load_reactions.clear()
             cached_load_decks.clear()
             st.session_state.pop(confirm_key, None)
@@ -299,6 +322,7 @@ def render_user_reaction_delete_panel(record: ReactionRecord, decks: list[DeckRe
 
 
 def render_deck_action_panel(record: ReactionRecord, decks: list[DeckRecord], decks_path: Path) -> None:
+    """Render the UI for adding the selected reaction to a deck."""
     st.subheader("Decks")
 
     deck_action_message = st.session_state.pop("browser_deck_action_message", None)
@@ -374,6 +398,7 @@ def render_deck_inspector_panel(
     remove_button_label: str,
     state_prefix: str,
 ) -> None:
+    """Render a compact reusable deck inspector with per-deck removal actions."""
     st.subheader(title)
 
     message_key = f"{state_prefix}_message"
@@ -436,6 +461,8 @@ def render_deck_inspector_panel(
     removal_options = [""]
     removal_labels = {"": "Choose a reaction to remove"}
     for reaction_id in selected_deck.reaction_ids:
+        # Build labels from the stored deck order rather than the resolved list
+        # so missing IDs still appear and can be removed intentionally.
         record = find_record_by_id(resolution.records, reaction_id)
         if record is not None:
             smiles_preview = record.reaction_smiles[:80]
@@ -487,6 +514,7 @@ def render_deck_inspector_panel(
 
 
 def duplicate_decision_label(choice: str, existing_record: ReactionRecord) -> str:
+    """Convert duplicate-resolution constants into user-facing labels."""
     if choice == DUPLICATE_DECISION_USE_EXISTING:
         return "Use existing local reaction"
     if choice == DUPLICATE_DECISION_IMPORT_AS_NEW:
@@ -495,6 +523,7 @@ def duplicate_decision_label(choice: str, existing_record: ReactionRecord) -> st
 
 
 def summarize_reaction_for_conflict_ui(record: ReactionRecord, *, max_length: int = 70) -> str:
+    """Build a short human-readable reaction label for import conflict screens."""
     if record.display_name:
         return record.display_name
 
@@ -511,6 +540,7 @@ def render_decks(
     decks_path: Path,
     user_path: Path,
 ) -> None:
+    """Render deck inspection plus portable deck export/import workflows."""
     st.subheader("Decks")
     st.caption("Inspect saved decks, export portable deck packages, and import shared decks with explicit duplicate resolution.")
 
@@ -552,6 +582,8 @@ def render_decks(
 
     pending_selected_deck_id = st.session_state.pop(pending_selected_deck_key, None)
     if pending_selected_deck_id is not None:
+        # After import/delete operations we restore the intended deck selection on
+        # the next rerun instead of depending on Streamlit widget retention.
         st.session_state.decks_tab_selected_deck_id = pending_selected_deck_id
 
     selected_deck_id = st.selectbox(
@@ -610,6 +642,9 @@ def render_decks(
                     except (UnicodeDecodeError, ValueError) as exc:
                         st.warning(str(exc))
                     else:
+                        # Store the full analysis in session state so the user
+                        # can review collisions and choose duplicate decisions
+                        # before any files are mutated.
                         st.session_state[transfer_analysis_key] = analysis
                         st.rerun()
 
@@ -715,6 +750,8 @@ def render_decks(
                     except ValueError as exc:
                         st.warning(str(exc))
                     else:
+                        # Import can change both user reactions and deck JSON, so
+                        # both caches must be refreshed before the next render.
                         cached_load_reactions.clear()
                         cached_load_decks.clear()
                         st.session_state[pending_selected_deck_key] = result.final_deck_id
@@ -790,6 +827,8 @@ def render_decks(
         )
 
     with st.expander("Delete Deck", expanded=False):
+        # Deleting a deck only removes the container of reaction IDs. The actual
+        # reaction records and saved quiz progress are left untouched.
         st.caption("Deleting a deck removes only the deck definition. Referenced reactions and quiz progress stay intact.")
 
         if st.session_state.get(confirm_delete_deck_key) != selected_deck.deck_id:
@@ -886,6 +925,7 @@ def render_decks(
 
 
 def render_add_reaction(records: list[ReactionRecord], user_path: Path) -> None:
+    """Render the user-reaction creation flow for text or visual entry."""
     st.subheader("Add Reaction")
     st.caption("Create a minimal user reaction with typed reaction SMILES or a bounded visual editor flow.")
 
@@ -952,6 +992,8 @@ def render_add_reaction(records: list[ReactionRecord], user_path: Path) -> None:
                 products_smiles=products_smiles or "",
             )
         except ValueError:
+            # Keep the visual preview blank until both sides are present rather
+            # than raising during ordinary in-progress editing.
             reaction_smiles = ""
 
         st.text_input(
@@ -1000,6 +1042,7 @@ def render_add_reaction(records: list[ReactionRecord], user_path: Path) -> None:
         st.warning(str(exc))
         return
 
+    # New user reactions affect the merged dataset shown in both Browser and Quiz.
     cached_load_reactions.clear()
     st.session_state.add_reaction_level = "success"
     st.session_state.add_reaction_message = f"Saved user reaction {new_record.reaction_id}."
@@ -1014,6 +1057,7 @@ def render_reaction_detail(
     decks_path: Path,
     user_path: Path,
 ) -> None:
+    """Render the full reaction detail panel plus edit/delete/deck actions."""
     render_reaction_core_detail(record, progress_by_id)
 
     if record.source == "user":
@@ -1027,6 +1071,7 @@ def render_reaction_detail(
 
 
 def find_record_by_id(records: list[ReactionRecord], reaction_id: str | None) -> ReactionRecord | None:
+    """Find a reaction by stable ID, returning `None` for an empty selection."""
     if reaction_id is None:
         return None
 
@@ -1037,6 +1082,7 @@ def find_record_by_id(records: list[ReactionRecord], reaction_id: str | None) ->
 
 
 def get_current_browser_filters() -> BrowserFilters:
+    """Rebuild browser filters from Streamlit session state for reuse elsewhere."""
     return BrowserFilters(
         search_text=st.session_state.get("browser_search_text", ""),
         max_reactants=st.session_state.get("browser_max_reactants", 3),
@@ -1048,6 +1094,7 @@ def resolve_selected_deck(
     decks: list[DeckRecord],
     reaction_lookup: dict[str, ReactionRecord],
 ) -> tuple[DeckRecord | None, list[ReactionRecord], list[str]]:
+    """Resolve the currently selected quiz deck against the loaded reactions."""
     selected_deck_id = st.session_state.get("quiz_selected_deck_id", "")
     if not selected_deck_id:
         return None, [], []
@@ -1066,6 +1113,7 @@ def start_next_quiz_reaction(
     *,
     allow_study_ahead: bool,
 ) -> None:
+    """Advance quiz session state to the next scheduled reaction."""
     current_id = st.session_state.get("quiz_reaction_id")
     recent_ids = st.session_state.get("quiz_recent_reaction_ids", [])
     relearning_ids = st.session_state.get("quiz_relearning_reaction_ids", [])
@@ -1078,6 +1126,8 @@ def start_next_quiz_reaction(
         recent_reaction_ids=recent_ids,
     )
     if selection.record is None:
+        # A `None` record means the scheduler found nothing eligible under the
+        # current pool and study-ahead settings.
         st.session_state.quiz_reaction_id = None
         st.session_state.quiz_revealed = False
         st.session_state.quiz_selection_mode = selection.selection_mode
@@ -1099,6 +1149,7 @@ def ensure_quiz_state(
     *,
     allow_study_ahead: bool,
 ) -> None:
+    """Initialize quiz session keys and recover if the current card vanished."""
     st.session_state.setdefault("quiz_count_again", 0)
     st.session_state.setdefault("quiz_count_hard", 0)
     st.session_state.setdefault("quiz_count_good", 0)
@@ -1111,6 +1162,8 @@ def ensure_quiz_state(
     st.session_state.setdefault("quiz_source_key", None)
 
     if find_record_by_id(records, st.session_state.get("quiz_reaction_id")) is None:
+        # This can happen when the quiz pool changes because of deck/filter edits
+        # or because the previous card was deleted from the underlying store.
         start_next_quiz_reaction(records, progress_by_id, allow_study_ahead=allow_study_ahead)
 
 
@@ -1121,6 +1174,7 @@ def reset_quiz_session(
     allow_study_ahead: bool,
     source_key: str,
 ) -> None:
+    """Clear quiz-only state and optionally start a fresh card immediately."""
     reset_quiz_session_state(st.session_state)
     st.session_state.quiz_source_key = source_key
 
@@ -1129,6 +1183,7 @@ def reset_quiz_session(
 
 
 def record_quiz_result(record: ReactionRecord, review_grade: str, progress_path: Path) -> None:
+    """Apply one quiz grade to in-session counters and the persisted progress file."""
     session_key = f"quiz_count_{review_grade}"
     st.session_state[session_key] += 1
     st.session_state.quiz_last_result = f"Marked {review_grade_label(review_grade)}"
@@ -1143,10 +1198,13 @@ def record_quiz_result(record: ReactionRecord, review_grade: str, progress_path:
         reaction_id=record.reaction_id,
         review_grade=review_grade,
     )
+    # The persisted progress store changed, so its cached loader must be reset
+    # before the next scheduler step reads it again.
     cached_load_quiz_progress.clear()
 
 
 def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord], progress_path: Path) -> None:
+    """Render the quiz tab, including scheduling controls and review actions."""
     st.subheader("Quiz")
     st.caption("Prompt: reactants only. Reveal the products when you are ready.")
 
@@ -1175,6 +1233,8 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord], progress
         value=False,
         key="quiz_use_browser_subset",
     )
+    # Quiz subset mode intentionally reuses the current Browser filters instead
+    # of maintaining a separate filter language for the same record set.
     browser_subset_records = filter_reactions(records, get_current_browser_filters())
     reaction_lookup = build_reaction_lookup(records)
     selected_deck, deck_records, missing_deck_ids = resolve_selected_deck(decks, reaction_lookup)
@@ -1227,6 +1287,9 @@ def render_quiz(records: list[ReactionRecord], decks: list[DeckRecord], progress
         source_label=source_pool.label,
         allow_study_ahead=allow_study_ahead,
     )
+    # Any change to deck choice, browser subset, filters, or study-ahead mode
+    # produces a new source key so stale completion state does not leak across
+    # effectively different quiz sessions.
     source_key_changed = sync_quiz_session_source(st.session_state, source_key)
     if source_key_changed:
         progress_by_id = cached_load_quiz_progress(str(progress_path))
@@ -1384,6 +1447,7 @@ def render_browser(
     decks_path: Path,
     user_path: Path,
 ) -> None:
+    """Render the searchable reaction browser and detail pane."""
     slider_state = compute_browser_reactant_slider_state(
         records,
         requested_value=st.session_state.get("browser_max_reactants"),
@@ -1425,6 +1489,8 @@ def render_browser(
     )
     previous_signature = st.session_state.get("browser_page_signature")
     if previous_signature != page_signature:
+        # Reset pagination when the result set definition changes so we do not
+        # keep the user on an out-of-range page from a previous filter state.
         st.session_state.browser_page_index = 0
         st.session_state.browser_page_signature = page_signature
 
@@ -1496,6 +1562,7 @@ def render_browser(
 
 
 def main() -> None:
+    """Start the Streamlit app and wire the main tabs together."""
     st.set_page_config(page_title="Hatzimanipractice Reaction Browser", layout="wide")
 
     st.title("Hatzimanipractice")

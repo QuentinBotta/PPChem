@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""CLI wrapper for building the conservative MVP reaction subset."""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,7 @@ from ppchem.curation.mvp_filter import MvpFilterCriteria, filter_mvp_reactions
 
 
 def main() -> None:
+    """Parse CLI arguments, apply the MVP filter, and print the report JSON."""
     parser = argparse.ArgumentParser(description="Create a conservative MVP reaction subset")
     parser.add_argument("--input", default="data/processed/reactions.base.json", help="Path to input JSON")
     parser.add_argument("--output", default="data/processed/reactions.mvp.json", help="Path to output JSON")
@@ -32,4 +35,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

@@ -1,3 +1,5 @@
+"""JSON persistence helpers for deck storage."""
+
 from __future__ import annotations
 
 import json
@@ -7,6 +9,7 @@ from .deck_schema import DeckRecord
 
 
 def write_deck_records(decks: list[DeckRecord], path: str | Path) -> None:
+    """Write all decks to JSON, creating parent folders when needed."""
     output_path = Path(path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     payload = [deck.to_dict() for deck in decks]
@@ -14,6 +17,7 @@ def write_deck_records(decks: list[DeckRecord], path: str | Path) -> None:
 
 
 def read_deck_records(path: str | Path) -> list[DeckRecord]:
+    """Load deck records from JSON into typed dataclass instances."""
     input_path = Path(path)
     payload = json.loads(input_path.read_text(encoding="utf-8"))
     return [DeckRecord.from_dict(item) for item in payload]

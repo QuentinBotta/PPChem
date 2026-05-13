@@ -1,3 +1,10 @@
+"""RDKit-backed rendering helpers with safe text fallbacks.
+
+The Streamlit app should stay usable even when RDKit is unavailable or cannot
+parse a structure. These helpers therefore return both image output and enough
+fallback information for the UI to degrade gracefully to SMILES text.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -6,6 +13,8 @@ from typing import Any
 
 @dataclass(frozen=True)
 class MoleculeGridRenderResult:
+    """Outcome of trying to render a list of molecules."""
+
     image: Any | None
     fallback_smiles: list[str]
     used_rdkit: bool
@@ -13,6 +22,8 @@ class MoleculeGridRenderResult:
 
 @dataclass(frozen=True)
 class ReactionRenderResult:
+    """Outcome of trying to render one reaction image."""
+
     image: Any | None
     fallback_reason: str | None
     used_rdkit: bool
@@ -24,6 +35,7 @@ def build_molecule_grid_image(
     chem_module: Any,
     draw_module: Any,
 ) -> MoleculeGridRenderResult:
+    """Render molecules with RDKit when possible, otherwise fall back to text."""
     if chem_module is None or draw_module is None:
         return MoleculeGridRenderResult(image=None, fallback_smiles=list(smiles_values), used_rdkit=False)
 
@@ -38,6 +50,8 @@ def build_molecule_grid_image(
             molecule = None
 
         if molecule is None:
+            # Keep bad or unsupported SMILES visible to the user instead of
+            # hiding them, so rendering issues do not silently discard data.
             fallback_smiles.append(smiles)
             continue
 
@@ -70,6 +84,7 @@ def build_reaction_image(
     reaction_module: Any,
     draw_module: Any,
 ) -> ReactionRenderResult:
+    """Render a reaction image with RDKit or explain why text fallback is used."""
     if reaction_module is None or draw_module is None:
         return ReactionRenderResult(
             image=None,

@@ -1,3 +1,9 @@
+"""Pure quiz selection logic used by the Streamlit UI.
+
+This module keeps scheduling and anti-repetition rules separate from the UI so
+they can be tested without Streamlit session state.
+"""
+
 from __future__ import annotations
 
 import random
@@ -12,6 +18,8 @@ ReviewGrade = Literal["again", "hard", "good", "easy"]
 
 @dataclass(frozen=True)
 class QuizStats:
+    """In-session answer counters shown in the quiz tab."""
+
     again: int = 0
     hard: int = 0
     good: int = 0
@@ -24,24 +32,32 @@ class QuizStats:
 
 @dataclass(frozen=True)
 class QuizFilters:
+    """Structural quiz filters applied after choosing the source pool."""
+
     max_reactants: int | None = None
     require_single_product: bool = False
 
 
 @dataclass(frozen=True)
 class QuizSourcePool:
+    """The record subset currently feeding the quiz session."""
+
     label: str
     records: list[ReactionRecord]
 
 
 @dataclass(frozen=True)
 class ScheduledQuizSelection:
+    """Selected reaction plus the reason it was chosen."""
+
     record: ReactionRecord | None
     selection_mode: str
 
 
 @dataclass(frozen=True)
 class QuizPoolStatus:
+    """Count summary for due/new/relearning/not-due records in the pool."""
+
     due_count: int
     unseen_count: int
     reviewed_not_due_count: int
@@ -53,6 +69,7 @@ class QuizPoolStatus:
 
 
 def filter_quiz_records(records: list[ReactionRecord], filters: QuizFilters) -> list[ReactionRecord]:
+    """Apply the quiz-only structural filters to a record list."""
     filtered = records
 
     if filters.max_reactants is not None:
@@ -65,12 +82,14 @@ def filter_quiz_records(records: list[ReactionRecord], filters: QuizFilters) -> 
 
 
 def recent_history_limit(pool_size: int) -> int:
+    """Keep recent-history anti-repetition small relative to the pool size."""
     if pool_size <= 1:
         return 1
     return min(5, pool_size - 1)
 
 
 def update_recent_history(history: list[str], reaction_id: str, *, max_length: int) -> list[str]:
+    """Move the chosen reaction ID to the end of the bounded recent-history list."""
     trimmed_history = [item for item in history if item != reaction_id]
     trimmed_history.append(reaction_id)
 
@@ -88,6 +107,11 @@ def choose_quiz_source_pool(
     browser_subset_records: list[ReactionRecord] | None = None,
     use_browser_subset: bool = False,
 ) -> QuizSourcePool:
+    """Choose the base pool for a quiz session from all records, a deck, or both.
+
+    When browser-subset mode is enabled we intersect by `reaction_id` so deck
+    selection and browser filters can both constrain the same stable records.
+    """
     records = deck_records if deck_records is not None else all_records
     label = deck_name or "All reactions"
 
@@ -108,6 +132,7 @@ def build_quiz_source_key(
     source_label: str,
     allow_study_ahead: bool,
 ) -> str:
+    """Build a deterministic key for session-state reset when the quiz pool changes."""
     reaction_ids = "|".join(record.reaction_id for record in records)
     return f"{source_label}|study_ahead={int(allow_study_ahead)}|records={reaction_ids}"
 
@@ -118,6 +143,7 @@ def update_relearning_reaction_ids(
     reaction_id: str,
     keep_in_relearning: bool,
 ) -> list[str]:
+    """Maintain the same-session relearning list used for `Again` cards."""
     updated_ids = [item for item in relearning_reaction_ids if item != reaction_id]
     if keep_in_relearning:
         updated_ids.append(reaction_id)
@@ -125,6 +151,7 @@ def update_relearning_reaction_ids(
 
 
 def reset_quiz_session_state(session_state: MutableMapping[str, Any]) -> None:
+    """Clear quiz-only session fields while leaving unrelated Streamlit state alone."""
     session_state["quiz_count_again"] = 0
     session_state["quiz_count_hard"] = 0
     session_state["quiz_count_good"] = 0
@@ -138,6 +165,7 @@ def reset_quiz_session_state(session_state: MutableMapping[str, Any]) -> None:
 
 
 def sync_quiz_session_source(session_state: MutableMapping[str, Any], source_key: str) -> bool:
+    """Reset stale quiz state when the active source pool changes."""
     previous_key = session_state.get("quiz_source_key")
     if previous_key == source_key:
         return False
@@ -154,6 +182,7 @@ def choose_random_reaction(
     recent_reaction_ids: list[str] | None = None,
     rng: random.Random | None = None,
 ) -> ReactionRecord:
+    """Choose one record while avoiding immediate repeats when possible."""
     if not records:
         raise ValueError("Cannot choose a quiz reaction from an empty record list")
 
@@ -162,6 +191,8 @@ def choose_random_reaction(
 
     random_source = rng or random
     recent_ids = set(recent_reaction_ids or [])
+    # The anti-repetition rule is best-effort: if the pool is too small, we
+    # relax recent-history avoidance before falling back to any record.
     candidates = [record for record in records if record.reaction_id not in recent_ids]
 
     if not candidates:
@@ -174,14 +205,17 @@ def choose_random_reaction(
 
 
 def format_quiz_prompt(record: ReactionRecord) -> list[str]:
+    """Return the reactant side used as the quiz prompt."""
     return record.reactants_smiles
 
 
 def format_quiz_answer(record: ReactionRecord) -> list[str]:
+    """Return the product side shown after reveal."""
     return record.products_smiles
 
 
 def review_grade_label(grade: ReviewGrade) -> str:
+    """Map internal review grades to UI labels."""
     return {
         "again": "Again",
         "hard": "Hard",
@@ -197,6 +231,7 @@ def summarize_quiz_pool(
     relearning_reaction_ids: list[str] | None = None,
     now_at: str | None = None,
 ) -> QuizPoolStatus:
+    """Count due/new/relearning/not-due records for the current quiz pool."""
     due_count = 0
     unseen_count = 0
     reviewed_not_due_count = 0
@@ -234,10 +269,14 @@ def choose_scheduled_quiz_reaction(
     now_at: str | None = None,
     rng: random.Random | None = None,
 ) -> ScheduledQuizSelection:
+    """Choose the next reaction using relearning, due, new, then study-ahead priority."""
     if not records:
         raise ValueError("Cannot choose a scheduled quiz reaction from an empty record list")
 
     relearning_ids = set(relearning_reaction_ids or [])
+    # `Again` cards stay eligible in the same session even if their persisted
+    # due time is in the future, which prevents the session from ending too
+    # early after a failed review.
     relearning_records = [record for record in records if record.reaction_id in relearning_ids]
     if relearning_records:
         chosen = choose_random_reaction(

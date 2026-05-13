@@ -1,3 +1,9 @@
+"""Pure browser helpers for filtering, pagination, and selection.
+
+Keeping this logic out of the Streamlit file makes it easier to test how the
+browser subset is defined, which is also reused by quiz mode.
+"""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -11,6 +17,8 @@ from ppchem.models.reaction_schema import ReactionRecord
 
 @dataclass(frozen=True)
 class BrowserFilters:
+    """Filter settings applied to the reaction browser."""
+
     search_text: str = ""
     max_reactants: int | None = None
     source: str = "all"
@@ -18,6 +26,8 @@ class BrowserFilters:
 
 @dataclass(frozen=True)
 class BrowserPagination:
+    """Calculated pagination state for the browser table."""
+
     page_index: int
     page_size: int
     total_results: int
@@ -28,19 +38,24 @@ class BrowserPagination:
 
 @dataclass(frozen=True)
 class BrowserReactantSliderState:
+    """Validated slider bounds for the browser reactant-count filter."""
+
     max_value: int
     current_value: int
 
 
 def load_reactions(path: str | Path) -> list[ReactionRecord]:
+    """Load browser records from the normalized JSON dataset."""
     return read_reaction_records(path)
 
 
 def reaction_label(record: ReactionRecord) -> str:
+    """Return the display label used in tables and detail views."""
     return record.display_name or record.reaction_id
 
 
 def reaction_search_text(record: ReactionRecord) -> str:
+    """Build a lowercase search blob from the record's visible text fields."""
     parts = [
         record.display_name or "",
         record.reaction_id,
@@ -58,6 +73,7 @@ def choose_selected_record(
     selected_rows: list[int] | None = None,
     previous_reaction_id: str | None = None,
 ) -> ReactionRecord | None:
+    """Resolve the browser selection from table state or prior selection."""
     if not records:
         return None
 
@@ -75,6 +91,7 @@ def choose_selected_record(
 
 
 def filter_reactions(records: list[ReactionRecord], filters: BrowserFilters) -> list[ReactionRecord]:
+    """Filter reactions by source, free-text search, and reactant count."""
     filtered = records
 
     if filters.source == "base":
@@ -102,6 +119,7 @@ def compute_browser_reactant_slider_state(
     requested_value: int | None,
     fallback_max: int = 3,
 ) -> BrowserReactantSliderState:
+    """Clamp the browser slider to values that make sense for the current dataset."""
     if fallback_max <= 0:
         raise ValueError("fallback_max must be positive")
 
@@ -121,6 +139,7 @@ def compute_browser_reactant_slider_state(
 
 
 def build_browser_page_signature(filters: BrowserFilters, *, page_size: int) -> tuple[str, int | None, str, int]:
+    """Build a signature used to reset pagination when browser filters change."""
     return (
         filters.search_text.strip().lower(),
         filters.max_reactants,
@@ -130,6 +149,7 @@ def build_browser_page_signature(filters: BrowserFilters, *, page_size: int) -> 
 
 
 def compute_browser_pagination(*, total_results: int, page_size: int, requested_page_index: int) -> BrowserPagination:
+    """Compute a valid page window for the browser table."""
     if page_size <= 0:
         raise ValueError("page_size must be positive")
 
@@ -154,10 +174,12 @@ def compute_browser_pagination(*, total_results: int, page_size: int, requested_
 
 
 def paginate_reactions(records: list[ReactionRecord], pagination: BrowserPagination) -> list[ReactionRecord]:
+    """Return only the reactions visible on the current page."""
     return records[pagination.start_index:pagination.end_index]
 
 
 def records_to_table(records: list[ReactionRecord]) -> pd.DataFrame:
+    """Project reactions into the compact table shown in the browser tab."""
     return pd.DataFrame(
         [
             {

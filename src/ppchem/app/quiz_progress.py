@@ -1,3 +1,10 @@
+"""Persistence and scheduling helpers for quiz review progress.
+
+The app keeps this model intentionally small and explicit rather than
+implementing a full Anki clone. The goal is readable behavior that can be
+explained and migrated safely.
+"""
+
 from __future__ import annotations
 
 import json
@@ -11,6 +18,8 @@ ReviewGradeValue = str
 
 @dataclass
 class QuizProgressRecord:
+    """Stored review history for one reaction ID."""
+
     reaction_id: str
     times_seen: int = 0
     count_again: int = 0
@@ -25,6 +34,7 @@ class QuizProgressRecord:
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "QuizProgressRecord":
+        """Load one progress record, including conservative migration of old data."""
         # Older progress files stored binary correct/incorrect counts.
         # We migrate them conservatively into the new grade model by mapping:
         # incorrect -> again, correct -> good.
@@ -51,11 +61,14 @@ class QuizProgressRecord:
         )
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize a progress record for JSON storage."""
         return asdict(self)
 
 
 @dataclass(frozen=True)
 class QuizProgressTotals:
+    """Aggregated counters for a selected subset of reactions."""
+
     times_seen: int = 0
     count_again: int = 0
     count_hard: int = 0
@@ -65,6 +78,8 @@ class QuizProgressTotals:
 
 @dataclass(frozen=True)
 class ReactionStudyStatus:
+    """User-facing summary of one reaction's current study state."""
+
     status_label: str
     last_grade_label: str | None
     next_due_at: str | None
@@ -76,20 +91,24 @@ class ReactionStudyStatus:
 
 
 def utc_now_iso() -> str:
+    """Return a compact UTC timestamp used across quiz persistence."""
     return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def parse_iso_datetime(value: str) -> datetime:
+    """Parse the app's stored ISO timestamp format."""
     return datetime.fromisoformat(value.replace("Z", "+00:00"))
 
 
 def add_days_iso(started_at: str, interval_days: float) -> str:
+    """Add a fractional day interval and return the result in stored ISO form."""
     started_dt = parse_iso_datetime(started_at)
     due_dt = started_dt + timedelta(days=interval_days)
     return due_dt.replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
 
 def is_due(record: QuizProgressRecord, *, now_at: str | None = None) -> bool:
+    """Return whether the record's due time has passed."""
     if record.due_at is None:
         return False
 
@@ -122,6 +141,7 @@ def compute_next_interval_days(record: QuizProgressRecord, review_grade: ReviewG
 
 
 def load_quiz_progress(path: str | Path) -> dict[str, QuizProgressRecord]:
+    """Load the progress store keyed by reaction ID, or return an empty store."""
     progress_path = Path(path)
     if not progress_path.exists():
         return {}
@@ -137,6 +157,7 @@ def load_quiz_progress(path: str | Path) -> dict[str, QuizProgressRecord]:
 
 
 def write_quiz_progress(progress_by_id: dict[str, QuizProgressRecord], path: str | Path) -> None:
+    """Persist quiz progress as a sorted JSON object keyed by reaction ID."""
     progress_path = Path(path)
     progress_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {
@@ -153,6 +174,7 @@ def update_quiz_progress(
     review_grade: ReviewGradeValue,
     seen_at: str | None = None,
 ) -> QuizProgressRecord:
+    """Update one reaction's spaced-review state in memory."""
     existing = progress_by_id.get(reaction_id)
     if existing is None:
         existing = QuizProgressRecord(reaction_id=reaction_id)
@@ -184,6 +206,7 @@ def record_quiz_result_in_store(
     review_grade: ReviewGradeValue,
     seen_at: str | None = None,
 ) -> QuizProgressRecord:
+    """Load, update, and rewrite the persisted progress store for one review."""
     progress_by_id = load_quiz_progress(path)
     updated = update_quiz_progress(
         progress_by_id,
@@ -199,6 +222,7 @@ def compute_quiz_progress_totals(
     progress_by_id: dict[str, QuizProgressRecord],
     reaction_ids: list[str] | None = None,
 ) -> QuizProgressTotals:
+    """Aggregate review counters, optionally limited to selected reaction IDs."""
     if reaction_ids is None:
         selected_records = list(progress_by_id.values())
     else:
@@ -219,6 +243,7 @@ def compute_quiz_progress_totals(
 
 
 def format_review_grade_label(review_grade: str | None) -> str | None:
+    """Convert stored review grades to user-facing labels."""
     if review_grade is None:
         return None
 
@@ -235,6 +260,7 @@ def summarize_reaction_study_status(
     *,
     now_at: str | None = None,
 ) -> ReactionStudyStatus:
+    """Build the compact status summary shown in the browser detail view."""
     if progress is None:
         return ReactionStudyStatus(
             status_label="New",

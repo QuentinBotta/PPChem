@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+"""CLI wrapper for converting raw TPL-style CSV into internal JSON."""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,7 @@ from ppchem.importers.tpl_importer import convert_tpl_csv
 
 
 def main() -> None:
+    """Parse CLI arguments, run the importer, and print the report JSON."""
     parser = argparse.ArgumentParser(description="Convert tpl.csv to PPChem internal JSON format")
     parser.add_argument("--input", default="data/raw/tpl.csv", help="Path to input CSV")
     parser.add_argument("--output", default="data/processed/reactions.base.json", help="Path to output JSON")

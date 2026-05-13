@@ -1,3 +1,10 @@
+"""Conservative structural filtering for the first app dataset.
+
+This module trims the imported base dataset down to a smaller MVP subset without
+adding chemistry interpretation. The browser and quiz read the filtered JSON so
+startup stays predictable on student machines.
+"""
+
 from __future__ import annotations
 
 import json
@@ -21,6 +28,7 @@ class MvpFilterCriteria:
 
 
 def _record_filter_reasons(record: ReactionRecord, criteria: MvpFilterCriteria) -> list[str]:
+    """Return every structural rule that excludes a record from the MVP set."""
     reasons: list[str] = []
 
     if len(record.reaction_smiles) > criteria.max_reaction_smiles_length:
@@ -68,6 +76,8 @@ def filter_mvp_reactions(
             continue
 
         if len(kept) >= criteria.max_records:
+            # The size cap is applied after structural checks so the subset stays
+            # deterministic for a given input ordering.
             reason = "mvp_size_limit"
             reason_counts[reason] = reason_counts.get(reason, 0) + 1
             continue
@@ -92,4 +102,3 @@ def filter_mvp_reactions(
         report_output.write_text(json.dumps(report, indent=2), encoding="utf-8")
 
     return report
-

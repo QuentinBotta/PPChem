@@ -1,3 +1,10 @@
+"""Canonical reaction record used everywhere in the project.
+
+This module defines the JSON-friendly schema shared by the importer, the
+filtered dataset, the Streamlit app, deck storage, and tests. Keeping one
+central record shape helps decks and user progress survive across app features.
+"""
+
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
@@ -39,10 +46,12 @@ class ReactionRecord:
 
     @staticmethod
     def utc_now_iso() -> str:
+        """Return a compact UTC timestamp for persisted records."""
         return datetime.now(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ReactionRecord":
+        """Build a record from persisted JSON after checking required keys."""
         required = [
             "reaction_id",
             "source",
@@ -60,6 +69,7 @@ class ReactionRecord:
         return cls(**value)
 
     def to_dict(self) -> dict[str, Any]:
+        """Serialize the record after enforcing the minimum reaction shape."""
         if not self.reaction_smiles:
             raise ValueError("reaction_smiles cannot be empty")
         if ">>" not in self.reaction_smiles:

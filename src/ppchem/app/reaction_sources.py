@@ -1,3 +1,10 @@
+"""Helpers for loading, validating, and mutating local reaction stores.
+
+This module sits between the Streamlit UI and persisted JSON files. It keeps
+identity, validation, and deck-cleanup rules in one place so the UI can stay
+thin and the behavior remains testable.
+"""
+
 from __future__ import annotations
 
 import copy
@@ -18,6 +25,8 @@ except Exception:
 
 @dataclass(frozen=True)
 class UserReactionDeletionResult:
+    """Summary of deleting one user reaction plus any affected decks."""
+
     reaction_id: str
     removed_from_user_store: bool
     affected_deck_ids: list[str]
@@ -25,6 +34,7 @@ class UserReactionDeletionResult:
 
 
 def load_optional_reactions(path: str | Path) -> list[ReactionRecord]:
+    """Load a reaction store if it exists, otherwise treat it as empty."""
     input_path = Path(path)
     if not input_path.exists():
         return []
@@ -32,6 +42,7 @@ def load_optional_reactions(path: str | Path) -> list[ReactionRecord]:
 
 
 def find_reaction_by_id(records: list[ReactionRecord], reaction_id: str) -> ReactionRecord | None:
+    """Find one reaction strictly by stable `reaction_id`."""
     for record in records:
         if record.reaction_id == reaction_id:
             return record
@@ -39,6 +50,7 @@ def find_reaction_by_id(records: list[ReactionRecord], reaction_id: str) -> Reac
 
 
 def validate_unique_reaction_ids(records: list[ReactionRecord]) -> None:
+    """Reject merged record lists that reuse the same `reaction_id` twice."""
     seen: set[str] = set()
     duplicates: list[str] = []
 
@@ -61,6 +73,7 @@ def load_app_reactions(
     base_path: str | Path,
     user_path: str | Path | None = None,
 ) -> list[ReactionRecord]:
+    """Load base reactions plus optional user reactions into one merged list."""
     records = list(read_reaction_records(base_path))
     if user_path is not None:
         records.extend(load_optional_reactions(user_path))
@@ -69,6 +82,7 @@ def load_app_reactions(
 
 
 def split_reaction_smiles(reaction_smiles: str) -> tuple[list[str], list[str]]:
+    """Parse a reaction SMILES string into non-empty reactant/product tokens."""
     normalized = reaction_smiles.strip()
     if not normalized:
         raise ValueError("Reaction SMILES cannot be empty")
@@ -92,6 +106,7 @@ def build_reaction_smiles_from_visual_inputs(
     reactants_smiles: str,
     products_smiles: str,
 ) -> str:
+    """Join visual-editor inputs into the same reaction SMILES format used everywhere else."""
     normalized_reactants = reactants_smiles.strip()
     normalized_products = products_smiles.strip()
 
@@ -107,6 +122,7 @@ def build_reaction_smiles_from_visual_inputs(
 
 
 def normalize_user_tags(raw_tags: str) -> list[str]:
+    """Normalize user tags by trimming, dropping empties, and de-duplicating."""
     seen: set[str] = set()
     normalized_tags: list[str] = []
 
@@ -127,6 +143,7 @@ def validate_reaction_with_rdkit(
     reactants: list[str],
     products: list[str],
 ) -> tuple[bool, list[str]]:
+    """Validate a reaction with RDKit when available, otherwise report that fact."""
     messages: list[str] = []
     if rdChemReactions is None or Chem is None:
         return False, ["rdkit_unavailable"]
@@ -148,6 +165,7 @@ def validate_reaction_with_rdkit(
 
 
 def next_user_reaction_id(records: list[ReactionRecord]) -> str:
+    """Choose the lowest unused `user_N` identifier from existing records."""
     used_numbers: set[int] = set()
     for record in records:
         if not record.reaction_id.startswith("user_"):
@@ -171,6 +189,11 @@ def build_user_reaction_record(
     raw_tags: str = "",
     created_by: str = "streamlit_app",
 ) -> ReactionRecord:
+    """Create a new user-authored reaction record from UI inputs.
+
+    Unknown chemistry metadata remains empty here as well. Manual entry only
+    fills fields the user explicitly supplied or the app can derive structurally.
+    """
     normalized = reaction_smiles.strip()
     reactants, products = split_reaction_smiles(normalized)
     is_validated, messages = validate_reaction_with_rdkit(normalized, reactants, products)
@@ -214,6 +237,7 @@ def append_user_reaction(
     raw_tags: str = "",
     created_by: str = "streamlit_app",
 ) -> ReactionRecord:
+    """Append one new user reaction to the user JSON store."""
     user_records = load_optional_reactions(user_path)
     new_record = build_user_reaction_record(
         reaction_smiles=reaction_smiles,
@@ -233,6 +257,11 @@ def build_imported_user_reaction_record(
     package_reaction_id: str,
     created_by: str = "deck_package_import",
 ) -> ReactionRecord:
+    """Clone an imported/shared reaction into local user space with a new ID.
+
+    We preserve the chemistry payload and provenance trail, but assign a new
+    local `reaction_id` so deck imports do not collide with existing records.
+    """
     normalized = source_record.reaction_smiles.strip()
     reactants, products = split_reaction_smiles(normalized)
     reaction_id = next_user_reaction_id(existing_records)
@@ -276,6 +305,7 @@ def build_updated_user_reaction_record(
     display_name: str = "",
     raw_tags: str = "",
 ) -> ReactionRecord:
+    """Build an updated version of an existing user reaction while preserving identity."""
     if existing_record.source != "user":
         raise ValueError("Only user reactions can be updated with this helper")
 
@@ -287,6 +317,7 @@ def build_updated_user_reaction_record(
         raise ValueError("RDKit validation failed: " + "; ".join(messages))
 
     return ReactionRecord(
+        # Decks and quiz progress refer to this stable ID, so edits must keep it.
         reaction_id=existing_record.reaction_id,
         source=existing_record.source,
         created_by=existing_record.created_by,
@@ -358,6 +389,7 @@ def delete_user_reaction_with_deck_cleanup(
     decks_path: str | Path,
     reaction_id: str,
 ) -> UserReactionDeletionResult:
+    """Delete a user reaction and remove its ID from every referencing deck."""
     user_records = load_optional_reactions(user_path)
     record = find_reaction_by_id(user_records, reaction_id)
 

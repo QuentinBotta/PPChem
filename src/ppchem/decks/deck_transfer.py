@@ -1,3 +1,10 @@
+"""Portable deck export/import helpers.
+
+This module lets users share a deck plus the reactions needed to resolve it.
+Imports are conservative: duplicate reactions and deck name collisions are
+analyzed first, then the caller must choose how to resolve them explicitly.
+"""
+
 from __future__ import annotations
 
 import json
@@ -75,6 +82,7 @@ class PortableDeckImportResult:
 
 
 def deduplicate_reaction_ids_preserving_order(reaction_ids: list[str]) -> list[str]:
+    """Drop duplicate IDs while preserving the first-seen ordering."""
     seen: set[str] = set()
     deduplicated: list[str] = []
 
@@ -88,6 +96,7 @@ def deduplicate_reaction_ids_preserving_order(reaction_ids: list[str]) -> list[s
 
 
 def choose_unique_deck_name(base_name: str, existing_names: set[str]) -> str:
+    """Create a visible deck name that does not collide with existing names."""
     if base_name not in existing_names:
         return base_name
 
@@ -100,11 +109,13 @@ def choose_unique_deck_name(base_name: str, existing_names: set[str]) -> str:
 
 
 def build_imported_deck_name(base_name: str, existing_names: set[str]) -> str:
+    """Prefer an explicit '(Imported)' suffix for separate imported decks."""
     preferred_name = f"{base_name} (Imported)"
     return choose_unique_deck_name(preferred_name, existing_names)
 
 
 def _reaction_record_to_package_dict(record: ReactionRecord) -> dict[str, Any]:
+    """Serialize one reaction payload for inclusion in a deck package."""
     return record.to_dict()
 
 
@@ -113,6 +124,11 @@ def export_deck_package_json(
     *,
     reaction_lookup: dict[str, ReactionRecord],
 ) -> str:
+    """Export one deck plus all referenced reactions into portable JSON.
+
+    The package stores reaction payloads separately from `reaction_refs` so deck
+    order can be preserved while duplicate references are still representable.
+    """
     resolution = resolve_deck_records(deck, reaction_lookup)
     if resolution.missing_reaction_ids:
         raise ValueError(
@@ -155,6 +171,7 @@ def export_deck_package_json(
 
 
 def parse_deck_package_json(raw_json: str) -> PortableDeckPackage:
+    """Parse and validate a portable deck package before import analysis."""
     try:
         payload = json.loads(raw_json)
     except json.JSONDecodeError as exc:
@@ -187,6 +204,8 @@ def parse_deck_package_json(raw_json: str) -> PortableDeckPackage:
     reaction_refs_payload = deck_payload.get("reaction_refs")
     if not isinstance(reaction_refs_payload, list) or any(not isinstance(item, str) or not item for item in reaction_refs_payload):
         raise ValueError("Deck package reaction_refs must be a list of non-empty strings")
+    # Deduplicate references up front so later merge/import logic can reason in
+    # terms of stable IDs without silently adding the same reaction twice.
     reaction_refs = deduplicate_reaction_ids_preserving_order(reaction_refs_payload)
 
     reactions_payload = payload.get("reactions")
@@ -241,6 +260,11 @@ def analyze_deck_package_import(
     local_records: list[ReactionRecord],
     existing_decks: list[DeckRecord] | None = None,
 ) -> PortableDeckImportAnalysis:
+    """Inspect a package against local data without mutating local storage.
+
+    Duplicate detection is intentionally conservative: right now an exact
+    `reaction_smiles` match is treated as the same reaction candidate.
+    """
     package = parse_deck_package_json(raw_json)
     duplicate_candidates: list[DuplicateReactionCandidate] = []
     no_conflict_reaction_ids: list[str] = []
@@ -297,6 +321,7 @@ def finalize_deck_package_import_into_store(
     deck_collision_choice: str = DECK_COLLISION_CHOICE_SEPARATE,
     merge_target_deck_id: str | None = None,
 ) -> PortableDeckImportResult:
+    """Apply explicit import decisions and persist the resulting deck/store changes."""
     reaction_entry_lookup = {entry.package_reaction_id: entry.reaction for entry in analysis.package.reactions}
     duplicate_lookup = {candidate.package_reaction_id: candidate for candidate in analysis.duplicate_candidates}
 
@@ -334,6 +359,8 @@ def finalize_deck_package_import_into_store(
                 continue
 
         source_reaction = reaction_entry_lookup[package_reaction_id]
+        # Imported copies get new user-space IDs because the local store owns the
+        # final identity. Deck references are then rewritten to those final IDs.
         imported_record = build_imported_user_reaction_record(
             source_reaction,
             existing_records=records_for_id_assignment,
@@ -367,6 +394,8 @@ def finalize_deck_package_import_into_store(
         merged_reaction_ids = deduplicate_reaction_ids_preserving_order(
             [*merge_target.reaction_ids, *final_reaction_ids]
         )
+        # Merge keeps the target deck's existing visible identity and only
+        # appends new reaction references that are not already present.
         added_count = len(merged_reaction_ids) - len(merge_target.reaction_ids)
         final_deck = DeckRecord(
             deck_id=merge_target.deck_id,
